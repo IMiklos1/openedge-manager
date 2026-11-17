@@ -1,0 +1,96 @@
+from datetime import datetime, timezone
+from fastapi import FastAPI, Depends, HTTPException
+from sqlalchemy.orm import Session
+from .db import Base, engine, get_db
+from .models import Agent, Flow, Deployment
+from .schemas import AgentHeartbeat, FlowCreate, DeploymentCreate
+from .catalog import CATALOG
+from .compiler import validate_flow
+
+Base.metadata.create_all(bind=engine)
+app = FastAPI(title="OpenEdge Manager API", version="0.1.0")
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "service": "openedge-manager-api"}
+
+@app.get("/api/v1/catalog")
+def catalog():
+    return CATALOG
+
+@app.get("/api/v1/agents")
+def list_agents(db: Session = Depends(get_db)):
+    rows = db.query(Agent).order_by(Agent.id).all()
+    return [{
+        "id": a.id, "hostname": a.hostname, "os_name": a.os_name,
+        "architecture": a.architecture, "runtime": a.runtime,
+        "runtime_version": a.runtime_version, "agent_class": a.agent_class,
+        "status": a.status, "reported_flow_version": a.reported_flow_version,
+        "last_seen": a.last_seen.isoformat() if a.last_seen else None
+    } for a in rows]
+
+@app.post("/api/v1/agents/{agent_id}/heartbeat")
+def oem_dev_heartbeat(agent_id: str, payload: AgentHeartbeat, db: Session = Depends(get_db)):
+    # Development-only OEM API; not Apache MiNiFi C2.
+    agent = db.get(Agent, agent_id) or Agent(id=agent_id)
+    for key, value in payload.model_dump().items():
+        setattr(agent, key, value)
+    agent.status = "ONLINE"
+    agent.last_seen = datetime.now(timezone.utc)
+    db.add(agent)
+    db.commit()
+    return {"accepted": True, "agent_id": agent_id, "note": "OEM dev API, not MiNiFi C2"}
+
+@app.get("/api/v1/flows")
+def list_flows(db: Session = Depends(get_db)):
+    return [{"id": f.id, "name": f.name, "version": f.current_version, "status": f.status}
+            for f in db.query(Flow).order_by(Flow.name).all()]
+
+@app.post("/api/v1/flows")
+def create_flow(payload: FlowCreate, db: Session = Depends(get_db)):
+    if db.get(Flow, payload.id):
+        raise HTTPException(409, "Flow ID already exists")
+    definition = payload.definition.model_dump()
+    errors = validate_flow(definition)
+    flow = Flow(id=payload.id, name=payload.name, description=payload.description,
+                current_version=1, definition=definition, status="DRAFT")
+    db.add(flow)
+    db.commit()
+    return {"id": flow.id, "version": flow.current_version, "validation_errors": errors}
+
+@app.get("/api/v1/flows/{flow_id}")
+def get_flow(flow_id: str, db: Session = Depends(get_db)):
+    flow = db.get(Flow, flow_id)
+    if not flow:
+        raise HTTPException(404, "Flow not found")
+    return {"id": flow.id, "name": flow.name, "version": flow.current_version,
+            "status": flow.status, "definition": flow.definition,
+            "validation_errors": validate_flow(flow.definition)}
+
+@app.post("/api/v1/flows/{flow_id}/publish")
+def publish_flow(flow_id: str, db: Session = Depends(get_db)):
+    flow = db.get(Flow, flow_id)
+    if not flow:
+        raise HTTPException(404, "Flow not found")
+    errors = validate_flow(flow.definition)
+    if errors:
+        raise HTTPException(422, {"validation_errors": errors})
+    flow.status = "PUBLISHED"
+    db.commit()
+    return {"id": flow.id, "version": flow.current_version, "status": flow.status,
+            "note": "Metadata publish only; runtime artifact compiler is not implemented."}
+
+@app.post("/api/v1/deployments")
+def create_deployment(payload: DeploymentCreate, db: Session = Depends(get_db)):
+    flow = db.get(Flow, payload.flow_id)
+    if not flow:
+        raise HTTPException(404, "Flow not found")
+    if flow.status != "PUBLISHED":
+        raise HTTPException(409, "Flow must be published before deployment")
+    deployment = Deployment(flow_id=flow.id, flow_version=flow.current_version,
+                            target_class=payload.target_class, status="PENDING")
+    db.add(deployment)
+    db.commit()
+    return {"id": deployment.id, "flow_id": flow.id, "version": flow.current_version,
+            "target_class": payload.target_class, "status": deployment.status,
+            "note": "C2 dispatch is not implemented in this starter."}

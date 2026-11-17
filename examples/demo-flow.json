@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "flow_id": "factory-file-to-mqtt",
+  "name": "Factory file to MQTT",
+  "description": "Illustrative DSL; verify processors against the pinned runtime build.",
+  "target_class": "linux-x86_64",
+  "parameters": {},
+  "nodes": [
+    {"id": "read-1", "type": "GetFile", "label": "Read input files", "config": {"Input Directory": "/var/edge/inbox"}},
+    {"id": "http-1", "type": "InvokeHTTP", "label": "Send to API", "config": {"HTTP Method": "POST", "Remote URL": "https://example.invalid/ingest"}}
+  ],
+  "connections": [{"id": "conn-1", "source": "read-1", "source_relationship": "success", "target": "http-1"}]
+}
