@@ -1,0 +1,7 @@
+MiNiFi Config Version: 3
+Flow Controller:
+  name: OpenEdge C2 test flow
+  id: 6c7c67b4-e0f6-4e4c-992d-ad48ddaf2c5b
+Processors: []
+Connections: []
+Remote Processing Groups: []

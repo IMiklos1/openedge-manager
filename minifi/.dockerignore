@@ -1,0 +1,6 @@
+*
+!Dockerfile
+!agent-01/
+!agent-01/conf/
+!agent-01/conf/config.yml
+!agent-01/conf/minifi.properties

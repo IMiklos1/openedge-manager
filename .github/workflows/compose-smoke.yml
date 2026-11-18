@@ -1,0 +1,23 @@
+name: Compose smoke tests
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      MINIFI_PROBE_AGENT_ID: oem-test-agent-01
+      OEM_API_PORT: "0"
+      OEM_UI_PORT: "0"
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+      - run: docker compose --profile smoke config --quiet
+      - run: docker compose --profile smoke up --build --exit-code-from smoke
+      - if: always()
+        run: docker compose --profile smoke down

@@ -1,0 +1,13 @@
+services:
+  api:
+    build:
+      secrets: [build_ca]
+  ui:
+    build:
+      secrets: [build_ca]
+  smoke:
+    build:
+      secrets: [build_ca]
+secrets:
+  build_ca:
+    file: ${OEM_BUILD_CA_FILE:?Set OEM_BUILD_CA_FILE to your trusted PEM CA bundle}
