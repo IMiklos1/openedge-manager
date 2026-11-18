@@ -7,7 +7,7 @@ defaults only on a developer machine. Keep real credentials in untracked local c
 Local MiNiFi C2 uses HTTP. The reported agent identifier and metadata are unverified, so a
 client with access to the API can impersonate an agent. The ACK contains an operation ID and
 no independently authenticated agent identity. The optional probe issues only a read-only
-metrics request. The adapter bounds and validates C2 bodies and persists only selected
+manifest request. The adapter bounds and validates C2 bodies and persists only selected
 inventory fields and the ACK state.
 
 Before production, implement the following.

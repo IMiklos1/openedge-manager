@@ -7,9 +7,9 @@ The audit found the following issues on the starting branch.
 | Finding | Status |
 | --- | --- |
 | The historical `minio/minio:latest` pull failed. The current Silo image was already an interim replacement tied to MinIO configuration. | Replaced with the maintained Apache-2.0 SeaweedFS 4.54 release and its published multi-platform digest. The old volume is preserved. |
-| The agent override pointed to a Java image, mounted the entire configuration directory, lacked a flow, and used the nonexistent Compose host `backend`. | The `agent` profile builds from the official pinned C++ image, retains its packaged defaults, and uses the Compose service name `api`. |
+| The Java agent configuration used unrecognized settings, mounted the entire configuration directory, and targeted a nonexistent service named `backend`. | The `agent` profile uses the official digest-pinned MiNiFi Java 2.12.0 image in `compose.minifi.yaml`, with its packaged flow and the `api` service name. |
 | Python transitive dependencies and npm installations were unpinned. PostgreSQL settings could disagree with the API URL. | Locked both dependency trees. Compose shares PostgreSQL settings with the API, which builds the URL safely. |
-| Browser requests crossed origins, and only PostgreSQL had meaningful Compose startup gating. | Vite proxies management calls on the same origin. Compose checks API database readiness, UI, Redis, S3 and the agent process. |
+| Browser requests crossed origins, and only PostgreSQL had meaningful Compose startup gating. | Vite proxies management calls on the same origin. Compose checks API database readiness, UI, Redis, S3, and the agent through its Java bootstrap status command. |
 | The C2 stub had no protocol implementation. The compiler, catalog and deployment flow were incomplete. | C2 heartbeat and acknowledgement are implemented. Runtime compilation, capability validation, and deployment execution are planned. |
 | The original FastAPI dependency resolved Starlette 0.46.2 with published security advisories. | Updated FastAPI and locked Starlette 1.10.0. |
 | The scaffold exposed development ports and relied on default credentials. Management and agent identity were unauthenticated. | Only UI and API ports bind to loopback. Authentication, authorization, TLS and rate limiting remain required for production. |
@@ -18,15 +18,15 @@ The audit found the following issues on the starting branch.
 
 | Check | Result |
 | --- | --- |
-| Docker Compose configuration | Validated default, `agent`, `smoke`, and trusted build CA configurations. |
+| Docker Compose configuration | Validated default, `agent`, `smoke`, explicit agent override, and trusted build CA configurations. |
 | Pinned images and locked dependencies | Resolved and built on Linux amd64 using Docker Engine 29.9.2 and Compose 2.40.3. A BuildKit CA secret supplied the test environment's TLS proxy trust. |
 | Backend and frontend | Backend container started and passed PostgreSQL readiness. Frontend `tsc -b` and `vite build` passed in the Docker build. |
-| Live integration | **6/6 passed** in a fresh Compose project. Covered real C++ heartbeat (200) and persisted `FULLY_APPLIED` ACK (204), duplicate and conflicting ACKs, C2 validation, API/UI proxy, Redis, and signed S3 object I/O with anonymous access denied. |
+| Live integration | **6/6 passed** in a fresh Compose project. Covered real MiNiFi Java heartbeat (200) and persisted `FULLY_APPLIED` ACK (204), duplicate and conflicting ACKs, C2 validation, API/UI proxy, Redis, and signed S3 object I/O with anonymous access denied. |
 | Dependency advisory scans | `npm audit` and `pip-audit` for both Python lockfiles reported zero known vulnerabilities at verification time. |
 | Platform coverage | Ran Linux amd64 containers. Verified Linux amd64 and arm64 manifests for the pinned MiNiFi and SeaweedFS images. Windows PowerShell, native Windows agents, and Linux arm64 execution were untested. |
 
-Apache MiNiFi C++ wire behavior was checked against the pinned upstream
-[RESTSender and RESTProtocol sources](https://github.com/apache/nifi-minifi-cpp/tree/1a4b84eb8b53eebcf7c92d83f6ae818f440e33ee/libminifi/src/c2/protocols).
+Apache MiNiFi Java wire behavior was checked against the pinned upstream
+[Java C2 client and protocol sources](https://github.com/apache/nifi/tree/19f4df8e048e91d87d3e4967c69b1298f9dbe450/c2).
 
 ## Phase 0 — Runtime spike (2–3 weeks)
 
