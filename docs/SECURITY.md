@@ -10,6 +10,12 @@ the reported agent ID when supplied. That reported ID is unauthenticated. Java f
 supply just the operation ID. The optional probe issues only a read-only manifest request. The adapter bounds and validates C2 bodies and persists only selected
 inventory fields and the ACK state.
 
+Flow replacement is disabled by default. `MINIFI_FLOW_AGENT_ID` opts one disposable
+agent into the test path. The compiler accepts only its allowlisted processors and fixed
+properties. The local download path is scoped to a dispatched operation. Agent IDs and
+operation IDs provide correlation in this local setup. Production rollout requires
+authenticated enrollment, scoped artifact access, and mTLS.
+
 Before production, implement the following.
 1. TLS reverse proxy; no public plaintext endpoints.
 2. Unique client certificate or cryptographic identity per agent.

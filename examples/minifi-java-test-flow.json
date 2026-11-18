@@ -1,0 +1,16 @@
+{
+  "id": "minifi-java-test",
+  "name": "MiNiFi test flow",
+  "definition": {
+    "schema_version": "1.0",
+    "flow_id": "minifi-java-test",
+    "name": "MiNiFi test flow",
+    "nodes": [
+      {"id": "generate", "type": "GenerateFlowFile"},
+      {"id": "log", "type": "LogAttribute"}
+    ],
+    "connections": [
+      {"id": "generated-file", "source": "generate", "target": "log", "source_relationship": "success"}
+    ]
+  }
+}

@@ -11,6 +11,7 @@ jobs:
     timeout-minutes: 15
     env:
       MINIFI_PROBE_AGENT_ID: oem-smoke-agent-01
+      MINIFI_FLOW_AGENT_ID: oem-smoke-agent-01
       OEM_API_PORT: "0"
       OEM_UI_PORT: "0"
     steps:
