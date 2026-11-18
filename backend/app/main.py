@@ -1,17 +1,33 @@
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from .db import Base, engine, get_db
 from .models import Agent, Flow, Deployment
 from .schemas import AgentHeartbeat, FlowCreate, DeploymentCreate
 from .catalog import CATALOG
 from .compiler import validate_flow
+from .c2 import router as minifi_c2_router
 
-Base.metadata.create_all(bind=engine)
-app = FastAPI(title="OpenEdge Manager API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    yield
+
+
+app = FastAPI(title="OpenEdge Manager API", version="0.1.0", lifespan=lifespan)
+app.include_router(minifi_c2_router)
+
 
 @app.get("/health")
-def health():
+def health(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        raise HTTPException(503, "Database unavailable") from exc
     return {"status": "ok", "service": "openedge-manager-api"}
 
 @app.get("/api/v1/catalog")
