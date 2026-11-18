@@ -22,6 +22,14 @@ class Agent(Base):
     last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
+class C2Probe(Base):
+    __tablename__ = "c2_probes"
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), primary_key=True)
+    operation_id: Mapped[str] = mapped_column(String(36), unique=True)
+    ack_state: Mapped[str | None] = mapped_column(String(32))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Flow(Base):
     __tablename__ = "flows"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

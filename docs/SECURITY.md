@@ -1,6 +1,16 @@
 # Security requirements
 
-Compose is local-development only. Before production:
+Compose publishes the UI and API on host loopback. PostgreSQL, Redis and SeaweedFS are
+reachable inside the Compose network, where other containers are trusted. Use the disposable
+defaults only on a developer machine. Keep real credentials in untracked local configuration.
+
+Local MiNiFi C2 uses HTTP. The reported agent identifier and metadata are unverified, so a
+client with access to the API can impersonate an agent. The ACK contains an operation ID and
+no independently authenticated agent identity. The optional probe issues only a read-only
+manifest request. The adapter bounds and validates C2 bodies and persists only selected
+inventory fields and the ACK state.
+
+Before production, implement the following.
 1. TLS reverse proxy; no public plaintext endpoints.
 2. Unique client certificate or cryptographic identity per agent.
 3. Validate agent identity and class authorization on every C2 request.

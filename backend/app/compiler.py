@@ -22,10 +22,10 @@ def validate_flow(definition: dict) -> list[str]:
             errors.append(f"Connection {edge.get('id')} references missing target.")
     return errors
 
-def compile_minifi_cpp_yaml(definition: dict) -> str:
+def compile_minifi_java_json(definition: dict) -> str:
     errors = validate_flow(definition)
     if errors:
         raise CompileError("; ".join(errors))
     raise NotImplementedError(
-        "Compiler is a deliberate stub. Implement against the pinned MiNiFi C++ YAML schema."
+        "Compiler is a deliberate stub. Implement against the pinned MiNiFi Java flow JSON format."
     )

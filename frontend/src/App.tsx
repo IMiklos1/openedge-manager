@@ -14,7 +14,7 @@ const initialEdges = [
   { id: 'e1-2', source: 'n1', target: 'n2', label: 'success' },
   { id: 'e2-3', source: 'n2', target: 'n3', label: 'matched' }
 ]
-const api = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const api = import.meta.env.VITE_API_BASE_URL || ''
 
 export default function App() {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)

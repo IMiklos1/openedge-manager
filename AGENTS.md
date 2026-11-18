@@ -40,9 +40,9 @@ Verify these paths and their current contents before relying on them.
 
 ### Known original gaps — verify before assuming they remain
 
-- `/api/v1/agents/{id}/heartbeat` was an OEM development endpoint, **not** the official Apache MiNiFi C++ C2 wire protocol.
+- `/api/v1/agents/{id}/heartbeat` handled only OEM development heartbeats.
 - The C2 adapter was an interface/stub, not a proven protocol implementation.
-- The flow compiler did not generate verified MiNiFi C++ configuration.
+- The flow compiler did not generate verified MiNiFi Java configuration.
 - Deployment initially stored metadata without actually delivering or applying a flow.
 - The processor catalog was illustrative rather than verified against a pinned runtime build.
 - Modbus/OPC UA may require custom extensions or gateways; Kafka/SQL and other processors require exact-build verification.
@@ -62,10 +62,11 @@ Do not paper over these gaps with mock responses.
 - Separate small C2 messages from large artifact downloads; use scoped, short-lived authenticated URLs or equivalent secure delivery.
 - Do not trust agent-supplied metadata or C2 payloads.
 
-### Apache MiNiFi C++ integration
+### Apache MiNiFi Java integration
 
-- **Pin an exact Apache MiNiFi C++ release/build** and document a tested OS/architecture matrix.
-- Check the official source and documentation for that **exact** version; do not assume Java MiNiFi or NiFi processors/configuration are compatible.
+- **Pin an exact Apache MiNiFi Java release/build** and document a tested OS/architecture matrix.
+- Check the official source and documentation for that **exact** version. Verify processor
+  NARs and flow configuration against the MiNiFi Java distribution.
 - Implement the real supported C2 protocol, including heartbeat, command delivery and acknowledgement semantics required by the chosen release.
 - Keep OEM management APIs separate from MiNiFi C2 endpoints.
 - Test C2 messages against a **real running agent**, not just fabricated payloads.
@@ -76,7 +77,7 @@ Do not paper over these gaps with mock responses.
 
 - Store an OEM-owned, **versioned canonical flow representation** independent of any specific agent runtime.
 - Validate node IDs, processor types, required and typed properties, relationships, connections, and runtime compatibility.
-- Compile deterministically to the **pinned MiNiFi C++ configuration format**.
+- Compile deterministically to the **pinned MiNiFi Java configuration format**.
 - Produce actionable validation errors linked to specific nodes, properties or edges.
 - Never silently drop unsupported nodes or unknown properties.
 - Store immutable flow versions and the compiler/runtime version used to produce each artifact.
@@ -95,7 +96,7 @@ The development environment must eventually include:
 - FastAPI backend and React frontend.
 - PostgreSQL and Redis.
 - An S3-compatible object store behind a replaceable storage abstraction.
-- At least **one real MiNiFi C++ test agent**, ideally under a Compose profile.
+- At least **one real MiNiFi Java test agent**, ideally under a Compose profile.
 - A simple HTTP receiver for `GetFile -> InvokeHTTP` end-to-end verification.
 - Optional additional agents and MQTT broker under an integration-test profile.
 
@@ -151,7 +152,7 @@ Before claiming completion, run the relevant available checks:
 - Frontend typecheck, lint/tests and production build.
 - JSON/YAML validation and `docker compose config`.
 - Docker image pulls/builds and service health checks **if Docker is available**.
-- Real MiNiFi C++ C2 heartbeat/ACK and flow execution tests **when that capability is in scope**.
+- Real MiNiFi Java C2 heartbeat/ACK and flow execution tests **when that capability is in scope**.
 
 For a feature to be complete, it must have:
 1. Defined behavior and error cases.
@@ -178,7 +179,7 @@ Use status labels such as **implemented**, **experimental**, **planned** and **u
 Unless the owner changes priorities:
 
 1. Repair reproducible Docker Compose setup and replace broken/unverified images.
-2. Add a pinned, real MiNiFi C++ test agent to Compose.
+2. Add a pinned, real MiNiFi Java test agent to Compose.
 3. Implement and verify actual C2 heartbeat, agent registration and acknowledgement.
 4. Implement a versioned canonical flow model and real deterministic MiNiFi compiler.
 5. Implement deployment delivery, per-agent status, retries and verified application.
