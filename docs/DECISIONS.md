@@ -8,3 +8,9 @@
   Processor availability is verified per exact build.
 - ADR-004: Modbus and OPC UA are not assumed to exist in stock runtime; evaluate custom
   processors versus a local protocol gateway.
+- ADR-005: use SeaweedFS 4.54 in single-node `weed mini` mode for local S3. Its
+  [Apache-2.0 source](https://github.com/seaweedfs/seaweedfs/tree/4.54) and
+  [published multi-architecture image](https://hub.docker.com/r/chrislusf/seaweedfs/tags)
+  can be verified independently. Shared S3 integration and production topology remain separate work.
+- ADR-006: verify the return path with MiNiFi C++ 1.1.0's read-only `describe metrics`
+  operation. Use a persisted operation ID to correlate ACKs without changing the edge flow.

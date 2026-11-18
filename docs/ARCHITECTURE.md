@@ -8,11 +8,20 @@
 - Self-hosted and open-source-first.
 
 ## Planes
-Control plane: React/TypeScript UI, FastAPI API, PostgreSQL, Redis worker queue, S3-compatible
-artifact store, Git repository, MiNiFi C2 adapter, compiler and monitoring.
 
-Edge data plane: MiNiFi C++ runtime, local flow/content repositories, outbound C2 client and
-protocol-specific processors/extensions.
+The local control plane runs React/TypeScript with a Vite proxy, FastAPI, and PostgreSQL.
+The browser uses same-origin requests for the management API and its documentation. The API's
+readiness check runs a database query. Redis and the S3-compatible SeaweedFS service are
+available inside the Compose network for future job and artifact integrations.
+
+PostgreSQL, Redis AOF, and SeaweedFS persist in separate named volumes. SeaweedFS initializes
+the local S3 bucket in `s3data`. The previous MinIO/Silo volume has its own format and requires
+an S3-level object migration if it contains data.
+
+The edge data plane uses the Apache MiNiFi C++ 1.1.0 container with its upstream configuration
+defaults, a C2 configuration fragment, and an empty test flow. The test agent has no listeners
+configured and publishes no ports. All base and infrastructure image references include
+multi-architecture manifest digests.
 
 ## Canonical flow model
 OEM Flow DSL is the source of truth. A versioned compiler translates approved nodes to the
@@ -50,15 +59,29 @@ Start MVP with files, HTTP, MQTT and TCP. Add Kafka/SQL after compatibility test
 Treat Modbus/OPC UA as dedicated extension work until proven otherwise.
 
 ## Outbound-only deployment
-Agents initiate HTTPS connections. No inbound edge listener is required. The control plane
-returns pending work through the selected C2 protocol. Large artifacts are fetched via HTTPS
-using short-lived scoped credentials. Deployments are idempotent and correlated by deployment
-ID and artifact digest.
+
+In local Compose, the agent sends HTTP requests to the API service over the project network.
+Production agents will initiate HTTPS connections, receive pending work in C2 responses, and
+fetch artifacts over HTTPS using short-lived credentials. Deployment delivery, artifact digest
+verification, and per-deployment status are planned.
 
 ## MiNiFi C2 boundary
-Implement a dedicated adapter against the official C2 protocol and a pinned MiNiFi C++ release.
-Contract tests must cover heartbeat, UPDATE/TRANSFER, artifact URL handling, ACK success/failure,
-retries, duplicate messages, identity, TLS and reconnect. OEM's dev heartbeat endpoint is not C2.
+
+The implemented adapter handles uncompressed JSON from MiNiFi C++ 1.1.0 RESTSender.
+`POST /c2-protocol/heartbeat` upserts agent identity and reported metadata in PostgreSQL,
+then returns a `requested_operations` array. The first heartbeat can include the build
+manifest. Later heartbeats can omit it and preserve the recorded version.
+
+To verify the return path, set `MINIFI_PROBE_AGENT_ID` to the test agent identifier. The API
+offers a read-only `describe metrics` operation with a persistent ID, then records the state
+from the agent-initiated `POST /c2-protocol/acknowledge`. An identical ACK can be replayed.
+The API stops offering the operation after any reported terminal state. It retains the state
+and timestamp and discards metric data. The legacy OEM development heartbeat remains a
+separate management endpoint.
+
+The smoke suite verifies real check-ins, reported metadata, and persistent ACK correlation.
+Production enrollment, TLS, UPDATE/TRANSFER, artifact URLs, reconnect behavior, deployment
+outcomes and scale testing are future work. See the [API contract](API.md).
 
 ## Deployment state machine
 DRAFT -> VALIDATED -> PUBLISHED -> PENDING -> DOWNLOADING -> STAGED -> APPLYING -> SUCCESS.
