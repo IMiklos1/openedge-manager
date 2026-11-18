@@ -1,6 +1,6 @@
 x-local-http: &local-http
-  NO_PROXY: 127.0.0.1,localhost,api,ui,storage
-  no_proxy: 127.0.0.1,localhost,api,ui,storage
+  NO_PROXY: 127.0.0.1,localhost,api,ui,storage,c2-observer
+  no_proxy: 127.0.0.1,localhost,api,ui,storage,c2-observer
 
 services:
   postgres:
@@ -78,10 +78,39 @@ services:
     restart: unless-stopped
 
   minifi-agent-01:
+    profiles: [agent]
     extends:
       file: compose.minifi.yaml
       service: minifi-agent-01
     environment: *local-http
+
+  c2-observer:
+    profiles: [smoke]
+    build:
+      context: ./backend
+      target: smoke
+    command: ["uvicorn", "c2_observer:app", "--app-dir", "tests", "--host", "0.0.0.0", "--port", "8001"]
+    environment: *local-http
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8001/observations', timeout=3).close()"]
+      interval: 2s
+      timeout: 4s
+      retries: 15
+
+  minifi-smoke-agent:
+    profiles: [smoke]
+    extends:
+      file: compose.minifi.yaml
+      service: minifi-agent-01
+    hostname: oem-smoke-agent-01
+    environment:
+      <<: *local-http
+      C2_AGENT_IDENTIFIER: oem-smoke-agent-01
+      C2_REST_PATH_BASE: http://c2-observer:8001/c2-protocol
+    depends_on:
+      c2-observer: {condition: service_healthy}
 
   smoke:
     profiles: [smoke]
@@ -96,7 +125,7 @@ services:
       ui: {condition: service_healthy}
       redis: {condition: service_healthy}
       storage: {condition: service_healthy}
-      minifi-agent-01: {condition: service_healthy}
+      minifi-smoke-agent: {condition: service_healthy}
 
 volumes:
   pgdata:

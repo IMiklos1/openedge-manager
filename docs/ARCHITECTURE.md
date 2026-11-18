@@ -79,9 +79,13 @@ The API stops offering the operation after any reported terminal state. It retai
 and timestamp and discards the extra ACK payload. The legacy OEM development heartbeat remains a
 separate management endpoint.
 
-The smoke suite verifies real check-ins, reported metadata, and persistent ACK correlation.
+The smoke profile runs the same pinned Java image with a separate agent ID. Its test-only
+observer forwards C2 traffic and retains selected fields in memory. Tests compare the actual
+heartbeat to the API and PostgreSQL, then match the returned command identifier with the live
+ACK and stored probe. The adapter also checks the reported agent ID when the ACK includes it.
 Production enrollment, TLS, UPDATE/TRANSFER, artifact URLs, reconnect behavior, deployment
-outcomes and scale testing are future work. See the [API contract](API.md).
+outcomes and scale testing are future work. See the [API contract](API.md) and
+[runtime decision](DECISIONS.md#adr-007--retain-minifi-java-for-the-verified-integration).
 
 ## Deployment state machine
 DRAFT -> VALIDATED -> PUBLISHED -> PENDING -> DOWNLOADING -> STAGED -> APPLYING -> SUCCESS.

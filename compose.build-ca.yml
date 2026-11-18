@@ -5,6 +5,9 @@ services:
   ui:
     build:
       secrets: [build_ca]
+  c2-observer:
+    build:
+      secrets: [build_ca]
   smoke:
     build:
       secrets: [build_ca]

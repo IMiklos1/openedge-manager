@@ -17,11 +17,12 @@ from botocore.exceptions import ClientError
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import C2Probe
+from app.models import Agent, C2Probe
 
 API = "http://api:8000"
 UI = "http://ui:5173"
-AGENT_ID = "oem-test-agent-01"
+AGENT_ID = "oem-smoke-agent-01"
+OBSERVER = "http://c2-observer:8001/observations"
 AGENTS = "/api/v1/agents"
 C2 = f"{API}/c2-protocol"
 
@@ -52,47 +53,6 @@ class ComposeSmokeTest(unittest.TestCase):
             self.assertIn(b"OpenEdge Manager", response.read())
         self.assertEqual(get_json(f"{UI}/api/v1/catalog"), get_json(f"{API}/api/v1/catalog"))
         self.assertIn("/api/v1/agents", get_json(f"{UI}/openapi.json")["paths"])
-
-    def test_real_agent_heartbeat_and_ack(self):
-        deadline = time.monotonic() + 60
-        first_seen = None
-        agent = probe = None
-        while time.monotonic() < deadline:
-            agents = get_json(f"{API}{AGENTS}")
-            agent = next((row for row in agents if row["id"] == AGENT_ID), None)
-            probe = read_probe()
-            if agent:
-                last_seen = datetime.fromisoformat(agent["last_seen"])
-                if first_seen is None:
-                    first_seen = last_seen
-                if last_seen > first_seen and probe and probe.acknowledged_at:
-                    break
-            time.sleep(1)
-        else:
-            self.fail(f"Timed out waiting for repeated agent heartbeats and a stored ACK. Agent={bool(agent)}, probe={bool(probe)}")
-
-        self.assertEqual(agent["agent_class"], "openedge-test")
-        self.assertEqual(agent["runtime"], "minifi-java")
-        self.assertEqual(agent["runtime_version"], "2.12.0")
-        self.assertEqual(agent["status"], "ONLINE")
-        self.assertEqual(agent["os_name"].lower(), "linux")
-        self.assertTrue(agent["hostname"])
-        self.assertTrue(agent["architecture"])
-        self.assertEqual(probe.ack_state, "FULLY_APPLIED")
-
-        ack = {
-            "operationId": probe.operation_id,
-            "operationState": {"state": probe.ack_state},
-        }
-        self.assertEqual(post_c2("acknowledge", ack), (204, b""))
-        self.assertEqual(read_probe().acknowledged_at, probe.acknowledged_at)
-
-        ack["operationState"]["state"] = "NOT_APPLIED"
-        with self.assertRaises(HTTPError) as error:
-            post_c2("acknowledge", ack)
-        with error.exception as response:
-            self.assertEqual(response.code, 409)
-        self.assertEqual(read_probe().ack_state, "FULLY_APPLIED")
 
     def test_invalid_heartbeat_and_unknown_ack(self):
         with self.assertRaises(HTTPError) as error:
@@ -152,3 +112,93 @@ class ComposeSmokeTest(unittest.TestCase):
                 self.assertEqual(stored.read(), body)
         finally:
             client.delete_object(Bucket=bucket, Key=key)
+
+
+class RealAgentC2Test(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        deadline = time.monotonic() + 60
+        observations = []
+        while time.monotonic() < deadline:
+            observations = get_json(OBSERVER)
+            for index, event in enumerate(observations):
+                if event["kind"] != "acknowledgement":
+                    continue
+                # The next heartbeat also proves the backend stopped offering the operation.
+                followup = next((entry for entry in observations[index + 1:] if entry["kind"] == "heartbeat"), None)
+                if followup is not None:
+                    cls.delivery = next((entry for entry in observations[:index] if entry["kind"] == "heartbeat"), None)
+                    cls.ack = event
+                    cls.followup = followup
+                    return
+            time.sleep(1)
+        kinds = [event["kind"] for event in observations]
+        raise AssertionError(f"Expected a live agent heartbeat, ACK, and another heartbeat. Observed {kinds}")
+
+    def test_heartbeat_persists_observed_inventory(self):
+        identity = self.followup["identity"]
+        self.assertEqual(identity["id"], AGENT_ID)
+        self.assertEqual(identity["agent_class"], "openedge-test")
+        self.assertEqual(identity["runtime"], "minifi-java")
+        self.assertEqual(identity["runtime_version"], "2.12.0")
+        self.assertEqual(identity["os_name"], "Linux")
+        self.assertTrue(identity["architecture"])
+        self.assertTrue(identity["hostname"])
+
+        agents = get_json(f"{API}{AGENTS}")
+        agent = next(row for row in agents if row["id"] == AGENT_ID)
+        self.assertEqual({key: agent[key] for key in identity}, identity)
+        self.assertEqual(agent["status"], "ONLINE")
+        last_seen = datetime.fromisoformat(agent["last_seen"])
+
+        with SessionLocal() as db:
+            row = db.get(Agent, AGENT_ID)
+            self.assertEqual({key: getattr(row, key) for key in identity}, identity)
+            self.assertEqual(row.status, "ONLINE")
+            self.assertGreaterEqual(row.last_seen, last_seen)
+            self.assertGreater(row.last_seen, row.created_at)
+
+    def test_ack_matches_the_command_sent_to_the_agent(self):
+        delivery = self.delivery
+        self.assertIsNotNone(delivery, "The agent ACK had no preceding heartbeat response")
+        self.assertEqual(delivery["identity"]["id"], AGENT_ID)
+        operation, = delivery["operations"]
+        self.assertEqual(operation["operation"], "DESCRIBE")
+        self.assertEqual(operation["operand"], "MANIFEST")
+        self.assertEqual(self.ack["agent_id"], AGENT_ID)
+        self.assertEqual(self.ack["operation_id"], operation["identifier"])
+        self.assertEqual(self.ack["state"], "FULLY_APPLIED")
+        self.assertEqual(self.followup["operations"], [])
+
+        probe = read_probe()
+        self.assertEqual(probe.operation_id, operation["identifier"])
+        self.assertEqual(probe.ack_state, self.ack["state"])
+        self.assertIsNotNone(probe.acknowledged_at)
+        print(f"Observed Java {AGENT_ID} acknowledge DESCRIBE MANIFEST {probe.operation_id} as {probe.ack_state}")
+
+        replay = {
+            "operationId": probe.operation_id,
+            "operationState": {"state": probe.ack_state},
+            "agentInfo": {"identifier": AGENT_ID},
+        }
+        self.assertEqual(post_c2("acknowledge", replay), (204, b""))
+        self.assertEqual(read_probe().acknowledged_at, probe.acknowledged_at)
+
+        replay["operationState"]["state"] = "NOT_APPLIED"
+        with self.assertRaises(HTTPError) as error:
+            post_c2("acknowledge", replay)
+        with error.exception as response:
+            self.assertEqual(response.code, 409)
+        self.assertEqual(read_probe().ack_state, "FULLY_APPLIED")
+
+    def test_ack_with_another_reported_agent_is_rejected(self):
+        probe = read_probe()
+        with self.assertRaises(HTTPError) as error:
+            post_c2("acknowledge", {
+                "operationId": self.ack["operation_id"],
+                "operationState": {"state": "FULLY_APPLIED"},
+                "agentInfo": {"identifier": "another-agent"},
+            })
+        with error.exception as response:
+            self.assertEqual(response.code, 404)
+        self.assertEqual(read_probe().acknowledged_at, probe.acknowledged_at)
