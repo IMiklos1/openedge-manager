@@ -52,6 +52,7 @@ services:
       <<: [*postgres-env, *local-http]
       POSTGRES_HOST: postgres
       MINIFI_PROBE_AGENT_ID: ${MINIFI_PROBE_AGENT_ID:-}
+      MINIFI_FLOW_AGENT_ID: ${MINIFI_FLOW_AGENT_ID:-}
     ports: ["127.0.0.1:${OEM_API_PORT:-8000}:8000"]
     depends_on:
       postgres: {condition: service_healthy}

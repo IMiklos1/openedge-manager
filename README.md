@@ -28,6 +28,41 @@ The C2 routes are documented in [the API specification](docs/API.md). Omit
 On Bash, use `test -f .env || cp .env.example .env` and the same Compose commands.
 `docker compose --profile agent down` stops the stack and keeps its named volumes.
 
+## Create and deploy the test flow
+
+Use a disposable local agent. A deployment replaces its active flow. From PowerShell:
+
+```powershell
+$env:MINIFI_FLOW_AGENT_ID = "oem-test-agent-01"
+docker compose --profile agent up --build -d --wait
+```
+
+Open the Flow Designer at `http://127.0.0.1:5173`. Select **Load test flow**,
+**Save draft**, then **Publish flow**. Select `oem-test-agent-01` and click **Deploy flow**.
+`ACKNOWLEDGED` records the agent's C2 result. `APPLIED` appears after a later heartbeat
+reports the published digest as the running flow. The test flow generates a one-byte FlowFile
+and sends it to LogAttribute.
+
+The same flow is available as [a draft request](examples/minifi-java-test-flow.json).
+To run it against a fresh project through the API:
+
+```powershell
+$api = "http://127.0.0.1:8000/api/v1"
+$body = Get-Content -Raw examples/minifi-java-test-flow.json
+$draft = Invoke-RestMethod -Uri "$api/flows" -Method Post -ContentType "application/json" -Body $body
+Invoke-RestMethod -Uri "$api/flows/$($draft.id)/publish" -Method Post
+$deployment = Invoke-RestMethod -Uri "$api/deployments" -Method Post -ContentType "application/json" -Body (
+    @{ flow_id = $draft.id; agent_id = "oem-test-agent-01" } | ConvertTo-Json
+)
+Invoke-RestMethod -Uri "$api/deployments/$($deployment.id)"
+docker compose --profile agent logs --tail 75 minifi-agent-01
+```
+
+Repeat the status request as the agent checks in. The example uses a fixed draft ID. Use the
+designer or change the example ID for another draft. The API applies Alembic migrations at
+startup and keeps pre-existing drafts and deployment records. A previously published draft
+needs to be published again to compile its runtime artifact.
+
 ## Run the automated smoke tests
 
 Use a fresh Compose project so the suite observes a new C2 operation and acknowledgement.
@@ -36,6 +71,7 @@ Run these commands from the repository root in PowerShell with Docker Desktop in
 ```powershell
 $smokeProject = "openedge-smoke-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
 $env:MINIFI_PROBE_AGENT_ID = "oem-smoke-agent-01"
+$env:MINIFI_FLOW_AGENT_ID = "oem-smoke-agent-01"
 $env:OEM_API_PORT = "0"
 $env:OEM_UI_PORT = "0"
 try {
@@ -45,7 +81,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Compose smoke tests failed ($LASTEXITCODE)." }
 } finally {
     docker compose -p $smokeProject --profile smoke down
-    Remove-Item Env:MINIFI_PROBE_AGENT_ID, Env:OEM_API_PORT, Env:OEM_UI_PORT
+    Remove-Item Env:MINIFI_PROBE_AGENT_ID, Env:MINIFI_FLOW_AGENT_ID, Env:OEM_API_PORT, Env:OEM_UI_PORT
 }
 ```
 
@@ -53,7 +89,7 @@ On Bash:
 
 ```bash
 smoke_project="openedge-smoke-$(date +%s)-$$"
-MINIFI_PROBE_AGENT_ID=oem-smoke-agent-01 OEM_API_PORT=0 OEM_UI_PORT=0 \
+MINIFI_PROBE_AGENT_ID=oem-smoke-agent-01 MINIFI_FLOW_AGENT_ID=oem-smoke-agent-01 OEM_API_PORT=0 OEM_UI_PORT=0 \
   docker compose -p "$smoke_project" --profile smoke up --build --exit-code-from smoke
 smoke_exit=$?
 docker compose -p "$smoke_project" --profile smoke down
@@ -65,8 +101,9 @@ The `smoke` profile starts `oem-smoke-agent-01` from the same pinned Java image 
 `agent` profile. A test-only HTTP observer forwards its real traffic to the backend. The suite
 compares the observed heartbeat with the API and PostgreSQL, then matches the command ID in the
 heartbeat response to the Java ACK and persisted outcome. It also checks UI/API readiness, Redis,
-and signed S3 object I/O. A successful run prints `Observed Java oem-smoke-agent-01 acknowledge
-DESCRIBE MANIFEST <id> as FULLY_APPLIED` and `Ran 8 tests`.
+and signed S3 object I/O. The suite also publishes a flow, verifies the downloaded bytes against
+the SHA-256 digest, and waits for the real agent to report that LogAttribute received FlowFiles.
+A successful run prints `MiNiFi applied <digest> and LogAttribute received a FlowFile`.
 
 For smoke-test diagnostics before cleanup, run
 `docker compose -p $smokeProject --profile smoke logs --tail 100 api c2-observer minifi-smoke-agent smoke`.
@@ -86,9 +123,10 @@ Test results and platform coverage are in the [implementation plan](docs/IMPLEME
 ## Scope
 
 The local stack stores agent inventory in PostgreSQL. Redis and SeaweedFS are provisioned
-and tested for future queue and artifact integration. Flow editing and publication are starter
-features, and deployment records are metadata. Runtime compilation, artifact delivery,
-deployment execution, and production identity, RBAC, and mTLS are planned.
+and tested for future queue and storage integration. The test compiler supports GenerateFlowFile
+and LogAttribute on MiNiFi Java 2.12.0. Compiled artifacts are immutable PostgreSQL records.
+C2 delivers an artifact to one explicitly enabled agent. Production identity, RBAC, mTLS,
+additional processors, and fleet rollout are planned.
 
 Only the UI and API are published to host loopback. The stack uses local plaintext HTTP and
 development-only credential defaults. See [architecture](docs/ARCHITECTURE.md) and

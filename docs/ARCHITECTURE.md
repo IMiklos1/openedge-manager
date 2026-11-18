@@ -18,15 +18,18 @@ PostgreSQL, Redis AOF, and SeaweedFS persist in separate named volumes. SeaweedF
 the local S3 bucket in `s3data`. The previous MinIO/Silo volume has its own format and requires
 an S3-level object migration if it contains data.
 
-The edge data plane uses the official Apache MiNiFi Java 2.12.0 container with its packaged
-empty flow and C2 environment settings in `compose.minifi.yaml`. Its bootstrap status
+The edge data plane uses the official Apache MiNiFi Java 2.12.0 container with C2 settings
+in `compose.minifi.yaml`. It starts with the packaged empty flow and can reload a published
+test flow through C2. Its bootstrap status
 listener binds to container loopback. The agent publishes no ports. Base and infrastructure
 image references include multi-architecture manifest digests.
 
 ## Canonical flow model
 OEM Flow DSL is the source of truth. A versioned compiler translates approved nodes to the
 pinned runtime configuration schema. Compiler outputs are immutable artifacts with SHA-256,
-runtime version, OS, architecture, processor catalogue version and DSL version metadata.
+runtime version and flow version metadata. The test compiler supports GenerateFlowFile
+and LogAttribute with fixed properties. Java artifact bytes live in PostgreSQL, with a
+separate immutable row for each published flow version.
 
 ## Designer requirements
 - Processor palette with search/categories.
@@ -62,8 +65,9 @@ Treat Modbus/OPC UA as dedicated extension work until proven otherwise.
 
 In local Compose, the agent sends HTTP requests to the API service over the project network.
 Production agents will initiate HTTPS connections, receive pending work in C2 responses, and
-fetch artifacts over HTTPS using short-lived credentials. Deployment delivery, artifact digest
-verification, and per-deployment status are planned.
+fetch artifacts over HTTPS using short-lived credentials. In the local slice, the agent
+downloads the JSON over its existing C2 connection after receiving an update operation.
+The backend tracks the artifact digest and per-deployment status.
 
 ## MiNiFi C2 boundary
 
@@ -83,14 +87,17 @@ The smoke profile runs the same pinned Java image with a separate agent ID. Its 
 observer forwards C2 traffic and retains selected fields in memory. Tests compare the actual
 heartbeat to the API and PostgreSQL, then match the returned command identifier with the live
 ACK and stored probe. The adapter also checks the reported agent ID when the ACK includes it.
-Production enrollment, TLS, UPDATE/TRANSFER, artifact URLs, reconnect behavior, deployment
-outcomes and scale testing are future work. See the [API contract](API.md) and
+The Java `UPDATE CONFIGURATION` operation uses the raw JSON pattern from the Apache
+[System Admin Guide](https://github.com/apache/nifi/blob/main/minifi/minifi-docs/src/main/markdown/System_Admin_Guide.md#config-file)
+and the pinned [Java operation handler](https://github.com/apache/nifi/blob/19f4df8e048e91d87d3e4967c69b1298f9dbe450/c2/c2-client-bundle/c2-client-service/src/main/java/org/apache/nifi/c2/client/service/operation/UpdateConfigurationOperationHandler.java).
+The read-only manifest probe remains available. Production enrollment, TLS, transfer,
+rollback, timeout recovery, and scale testing are future work. See the [API contract](API.md) and
 [runtime decision](DECISIONS.md#adr-007--retain-minifi-java-for-the-verified-integration).
 
 ## Deployment state machine
-DRAFT -> VALIDATED -> PUBLISHED -> PENDING -> DOWNLOADING -> STAGED -> APPLYING -> SUCCESS.
-Failure branches: VALIDATION_FAILED, DOWNLOAD_FAILED, APPLY_FAILED, TIMED_OUT.
-Rollback is a new deployment of a previous immutable artifact.
+The implemented test path is `DRAFT → PUBLISHED → PENDING → DISPATCHED → ACKNOWLEDGED → APPLIED`.
+A negative ACK transitions the deployment to `FAILED`. A partial unique index permits one
+active delivery per eligible agent. Timeout, staged rollout, and rollback are planned.
 
 ## Scale and availability
 Use stateless API/C2 instances behind a reverse proxy. PostgreSQL is source of truth; Redis is

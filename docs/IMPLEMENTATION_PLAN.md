@@ -37,6 +37,24 @@ device reconnect/retry and failover, flow deployment and rollback, and processor
 The Linux image manifests and release artifacts establish availability. The C++ run was an
 idle footprint comparison. C++ C2 compatibility with OEM remains unverified.
 
+## Verified flow creation slice
+
+The local Flow Designer can load the test graph, save a draft, publish an immutable
+MiNiFi Java 2.12.0 artifact, and deploy it to one explicitly enabled agent. The backend
+uses Alembic to adopt an existing schema and add artifact and deployment state. The
+test compiler supports GenerateFlowFile and LogAttribute with fixed properties.
+
+The updated Compose suite passed 11 tests on Linux amd64. The workflow test called the
+management API through the UI proxy, observed the real agent fetch bytes with the published
+SHA-256, matched its `FULLY_APPLIED` ACK to the deployment, and observed LogAttribute
+receive a FlowFile in a subsequent heartbeat. It also covered an unsupported draft and
+the disabled target. The migration test preserved legacy SQLite rows. The Compose stack
+applied both revisions on a fresh PostgreSQL database.
+
+Use the [PowerShell walkthrough and test commands](../README.md#create-and-deploy-the-test-flow)
+to reproduce the flow. Native Windows and ARM64 execution, arbitrary processor properties,
+deployment expiry, authenticated enrollment, and fleet rollback are unverified.
+
 ## Phase 0 — Runtime spike (2–3 weeks)
 
 Expand the tested runtime/build matrix to Windows x64 and Linux ARM64. Verify processor
@@ -45,7 +63,7 @@ and a test receiver before claiming data-plane support.
 
 ## Phase 1 — Control plane MVP (3–5 weeks)
 
-Add schema migrations and authenticated enrollment. Extend C2 contract tests to mTLS and
+Build on the versioned schema and add authenticated enrollment. Extend C2 contract tests to mTLS and
 operation delivery. Integrate the artifact store and verify downloaded artifacts by digest.
 Use authenticated agent identity and persistent operation IDs to correlate delivery outcomes.
 

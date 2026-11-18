@@ -9,9 +9,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
+from .compiler import MINIFI_VERSION
 from .config import settings
 from .db import get_db
-from .models import Agent, C2Probe
+from .models import Agent, C2Probe, Deployment
+from .delivery import UpdateConfiguration, acknowledge_flow_update, artifact_for, flow_update
 
 router = APIRouter(prefix="/c2-protocol", tags=["MiNiFi C2"])
 MAX_BODY_BYTES = 4 * 1024 * 1024
@@ -50,9 +52,15 @@ class DeviceInfo(BaseModel):
     networkInfo: NetworkInfo | None = None
 
 
+class FlowInfo(BaseModel):
+    flowId: str | None = None
+    runStatus: Literal["RUNNING", "STOPPED"] | None = None
+
+
 class Heartbeat(BaseModel):
     agentInfo: AgentInfo
     deviceInfo: DeviceInfo | None = None
+    flowInfo: FlowInfo | None = None
 
 
 class OperationState(BaseModel):
@@ -76,7 +84,7 @@ class DescribeManifest(BaseModel):
 
 
 class HeartbeatResponse(BaseModel):
-    requestedOperations: list[DescribeManifest]
+    requestedOperations: list[DescribeManifest | UpdateConfiguration]
 
 
 async def read_c2_body(request: Request) -> bytearray:
@@ -124,7 +132,8 @@ def heartbeat(
         "architecture": system.machineArch if system else None,
     }
     values = {key: value for key, value in reported_values.items() if value}
-    values.update(runtime="minifi-java", status="ONLINE", last_seen=datetime.now(timezone.utc))
+    seen_at = datetime.now(timezone.utc)
+    values.update(runtime="minifi-java", status="ONLINE", last_seen=seen_at)
     insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
     db.execute(insert(Agent).values(id=info.identifier, **values).on_conflict_do_update(
         index_elements=[Agent.id], set_=values,
@@ -139,6 +148,12 @@ def heartbeat(
         probe = db.get(C2Probe, info.identifier)
         if probe.ack_state is None:
             operations.append(DescribeManifest(identifier=probe.operation_id))
+    running_flow = payload.flowInfo.flowId if payload.flowInfo and payload.flowInfo.runStatus == "RUNNING" else None
+    # Only a heartbeat from the pinned runtime may receive a compiled flow.
+    if info.identifier == settings.minifi_flow_agent_id and db.get(Agent, info.identifier).runtime_version == MINIFI_VERSION:
+        command = flow_update(db, info.identifier, running_flow, seen_at)
+        if command is not None:
+            operations.append(command)
     db.commit()
     return HeartbeatResponse(requestedOperations=operations)
 
@@ -153,15 +168,35 @@ def acknowledge(
     operation = C2Probe.operation_id == ack.operationId
     if ack.agentInfo is not None:
         operation = operation & (C2Probe.agent_id == ack.agentInfo.identifier)
+    received_at = datetime.now(timezone.utc)
     updated = db.execute(
         update(C2Probe).where(operation, C2Probe.ack_state.is_(None))
-        .values(ack_state=state, acknowledged_at=datetime.now(timezone.utc)),
+        .values(ack_state=state, acknowledged_at=received_at),
     )
     if updated.rowcount == 0:
         previous_state = db.scalar(select(C2Probe.ack_state).where(operation))
         if previous_state is None:
-            raise HTTPException(404, "Unknown C2 operation")
-        if previous_state != state:
+            agent_id = ack.agentInfo.identifier if ack.agentInfo else None
+            acknowledge_flow_update(db, ack.operationId, agent_id, state, received_at)
+        elif previous_state != state:
             raise HTTPException(409, "C2 operation already acknowledged with a different state")
     db.commit()
     return Response(status_code=204)
+
+
+@router.get("/configuration/{operation_id}")
+def download_configuration(operation_id: AgentId, db: Annotated[Session, Depends(get_db)]):
+    deployment = db.get(Deployment, operation_id)
+    if (
+        deployment is None
+        or not deployment.agent_id
+        or deployment.agent_id != settings.minifi_flow_agent_id
+        or deployment.status != "DISPATCHED"
+    ):
+        raise HTTPException(404, "No configuration for this operation")
+    artifact = artifact_for(db, deployment)
+    return Response(
+        artifact.content,
+        media_type="application/json",
+        headers={"ETag": f'"{artifact.sha256}"', "Cache-Control": "no-store"},
+    )
