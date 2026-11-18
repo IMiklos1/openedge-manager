@@ -72,8 +72,8 @@ class ComposeSmokeTest(unittest.TestCase):
             self.fail(f"Timed out waiting for repeated agent heartbeats and a stored ACK. Agent={bool(agent)}, probe={bool(probe)}")
 
         self.assertEqual(agent["agent_class"], "openedge-test")
-        self.assertEqual(agent["runtime"], "minifi-cpp")
-        self.assertEqual(agent["runtime_version"], "1.1.0")
+        self.assertEqual(agent["runtime"], "minifi-java")
+        self.assertEqual(agent["runtime_version"], "2.12.0")
         self.assertEqual(agent["status"], "ONLINE")
         self.assertEqual(agent["os_name"].lower(), "linux")
         self.assertTrue(agent["hostname"])
@@ -81,9 +81,7 @@ class ComposeSmokeTest(unittest.TestCase):
         self.assertEqual(probe.ack_state, "FULLY_APPLIED")
 
         ack = {
-            "operation": "acknowledge",
             "operationId": probe.operation_id,
-            "identifier": probe.operation_id,
             "operationState": {"state": probe.ack_state},
         }
         self.assertEqual(post_c2("acknowledge", ack), (204, b""))
@@ -98,13 +96,12 @@ class ComposeSmokeTest(unittest.TestCase):
 
     def test_invalid_heartbeat_and_unknown_ack(self):
         with self.assertRaises(HTTPError) as error:
-            post_c2("heartbeat", {"operation": "heartbeat", "agentInfo": {}})
+            post_c2("heartbeat", {"agentInfo": {}})
         with error.exception as response:
             self.assertEqual(response.code, 422)
 
         with self.assertRaises(HTTPError) as error:
             post_c2("acknowledge", {
-                "operation": "acknowledge",
                 "operationId": str(uuid4()),
                 "operationState": {"state": "FULLY_APPLIED"},
             })

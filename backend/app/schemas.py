@@ -5,7 +5,7 @@ class AgentHeartbeat(BaseModel):
     hostname: str | None = None
     os_name: str | None = None
     architecture: str | None = None
-    runtime: str | None = "minifi-cpp"
+    runtime: str | None = "minifi-java"
     runtime_version: str | None = None
     agent_class: str = "unassigned"
     reported_flow_version: int = 0

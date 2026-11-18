@@ -3,7 +3,7 @@ from typing import Annotated, Literal, TypeVar
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, StringConstraints, ValidationError, model_validator
+from pydantic import BaseModel, StringConstraints, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -16,14 +16,17 @@ from .models import Agent, C2Probe
 router = APIRouter(prefix="/c2-protocol", tags=["MiNiFi C2"])
 MAX_BODY_BYTES = 4 * 1024 * 1024
 AgentId = Annotated[str, StringConstraints(min_length=1, max_length=128, pattern=r"^[^\x00-\x20\x7f]+$")]
+RuntimeVersion = Annotated[str, StringConstraints(max_length=100, pattern=r"^[^\x00]*$")]
 AckState = Literal["FULLY_APPLIED", "PARTIALLY_APPLIED", "OPERATION_NOT_UNDERSTOOD", "NO_OPERATION", "NOT_APPLIED"]
 
 
 class BuildInfo(BaseModel):
-    version: Annotated[str, StringConstraints(max_length=100, pattern=r"^[^\x00]*$")] | None = None
+    version: RuntimeVersion | None = None
 
 
 class AgentManifest(BaseModel):
+    agentType: Literal["minifi-java"] | None = None
+    version: RuntimeVersion | None = None
     buildInfo: BuildInfo | None = None
 
 
@@ -48,7 +51,6 @@ class DeviceInfo(BaseModel):
 
 
 class Heartbeat(BaseModel):
-    operation: Literal["heartbeat"]
     agentInfo: AgentInfo
     deviceInfo: DeviceInfo | None = None
 
@@ -58,27 +60,18 @@ class OperationState(BaseModel):
 
 
 class Acknowledgement(BaseModel):
-    operation: Literal["acknowledge"]
     operationId: AgentId
-    identifier: AgentId | None = None
     operationState: OperationState
 
-    @model_validator(mode="after")
-    def validate_identifier(self):
-        if self.identifier is not None and self.identifier != self.operationId:
-            raise ValueError("ACK identifiers must match")
-        return self
 
-
-class DescribeMetrics(BaseModel):
-    operation: Literal["describe"] = "describe"
-    name: Literal["metrics"] = "metrics"
-    operationId: str
+class DescribeManifest(BaseModel):
+    identifier: str
+    operation: Literal["DESCRIBE"] = "DESCRIBE"
+    operand: Literal["MANIFEST"] = "MANIFEST"
 
 
 class HeartbeatResponse(BaseModel):
-    operation: Literal["heartbeat"] = "heartbeat"
-    requested_operations: list[DescribeMetrics]
+    requestedOperations: list[DescribeManifest]
 
 
 async def read_c2_body(request: Request) -> bytearray:
@@ -116,15 +109,17 @@ def heartbeat(
     device = payload.deviceInfo
     system = device.systemInfo if device else None
     network = device.networkInfo if device else None
+    build = manifest.buildInfo if manifest else None
+    version = manifest.version if manifest else None
     reported_values = {
         "agent_class": info.agentClass,
-        "runtime_version": manifest.buildInfo.version if manifest and manifest.buildInfo else None,
+        "runtime_version": version or (build.version if build else None),
         "hostname": network.hostname if network else None,
         "os_name": system.operatingSystem if system else None,
         "architecture": system.machineArch if system else None,
     }
     values = {key: value for key, value in reported_values.items() if value}
-    values.update(runtime="minifi-cpp", status="ONLINE", last_seen=datetime.now(timezone.utc))
+    values.update(runtime="minifi-java", status="ONLINE", last_seen=datetime.now(timezone.utc))
     insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
     db.execute(insert(Agent).values(id=info.identifier, **values).on_conflict_do_update(
         index_elements=[Agent.id], set_=values,
@@ -138,9 +133,9 @@ def heartbeat(
         ))
         probe = db.get(C2Probe, info.identifier)
         if probe.ack_state is None:
-            operations.append(DescribeMetrics(operationId=probe.operation_id))
+            operations.append(DescribeManifest(identifier=probe.operation_id))
     db.commit()
-    return HeartbeatResponse(requested_operations=operations)
+    return HeartbeatResponse(requestedOperations=operations)
 
 
 @router.post("/acknowledge", status_code=204)

@@ -1,0 +1,27 @@
+services:
+  minifi-agent-01:
+    profiles: [agent, smoke]
+    image: apache/nifi-minifi:2.12.0@sha256:ad599a28a8955ac6bc9b4f5839a767241e20efa406975aedd9c620c4f4a08578
+    hostname: oem-test-agent-01
+    init: true
+    environment:
+      C2_ENABLE: "true"
+      C2_AGENT_IDENTIFIER: oem-test-agent-01
+      C2_AGENT_CLASS: openedge-test
+      C2_AGENT_HEARTBEAT_PERIOD: "5000"
+      C2_FULL_HEARTBEAT: "true"
+      C2_REQUEST_COMPRESSION: none
+      C2_REST_PATH_BASE: http://api:8000/c2-protocol
+      C2_REST_PATH_HEARTBEAT: /heartbeat
+      C2_REST_PATH_ACKNOWLEDGE: /acknowledge
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "./bin/minifi.sh", "status"]
+      interval: 15s
+      # The upstream status script sleeps for five seconds before returning.
+      timeout: 15s
+      retries: 12
+      start_period: 30s
+    stop_grace_period: 30s
+    restart: unless-stopped

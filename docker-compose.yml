@@ -78,19 +78,10 @@ services:
     restart: unless-stopped
 
   minifi-agent-01:
-    profiles: [agent, smoke]
-    build: ./minifi
-    hostname: oem-test-agent-01
+    extends:
+      file: compose.minifi.yaml
+      service: minifi-agent-01
     environment: *local-http
-    init: true
-    depends_on:
-      api: {condition: service_healthy}
-    healthcheck:
-      test: ["CMD", "pidof", "minifi"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    restart: unless-stopped
 
   smoke:
     profiles: [smoke]
