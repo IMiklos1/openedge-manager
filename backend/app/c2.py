@@ -59,9 +59,14 @@ class OperationState(BaseModel):
     state: AckState
 
 
+class AcknowledgingAgent(BaseModel):
+    identifier: AgentId
+
+
 class Acknowledgement(BaseModel):
     operationId: AgentId
     operationState: OperationState
+    agentInfo: AcknowledgingAgent | None = None
 
 
 class DescribeManifest(BaseModel):
@@ -146,6 +151,8 @@ def acknowledge(
     ack = parse_c2_message(Acknowledgement, body)
     state = ack.operationState.state
     operation = C2Probe.operation_id == ack.operationId
+    if ack.agentInfo is not None:
+        operation = operation & (C2Probe.agent_id == ack.agentInfo.identifier)
     updated = db.execute(
         update(C2Probe).where(operation, C2Probe.ack_state.is_(None))
         .values(ack_state=state, acknowledged_at=datetime.now(timezone.utc)),

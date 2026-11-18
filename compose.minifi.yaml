@@ -1,6 +1,5 @@
 services:
   minifi-agent-01:
-    profiles: [agent, smoke]
     image: apache/nifi-minifi:2.12.0@sha256:ad599a28a8955ac6bc9b4f5839a767241e20efa406975aedd9c620c4f4a08578
     hostname: oem-test-agent-01
     init: true
