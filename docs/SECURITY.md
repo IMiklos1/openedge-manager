@@ -5,9 +5,9 @@ reachable inside the Compose network, where other containers are trusted. Use th
 defaults only on a developer machine. Keep real credentials in untracked local configuration.
 
 Local MiNiFi C2 uses HTTP. The reported agent identifier and metadata are unverified, so a
-client with access to the API can impersonate an agent. The ACK contains an operation ID and
-no independently authenticated agent identity. The optional probe issues only a read-only
-manifest request. The adapter bounds and validates C2 bodies and persists only selected
+client with access to the API can impersonate an agent. The ACK matches its operation ID and
+the reported agent ID when supplied. That reported ID is unauthenticated. Java failure ACKs may
+supply just the operation ID. The optional probe issues only a read-only manifest request. The adapter bounds and validates C2 bodies and persists only selected
 inventory fields and the ACK state.
 
 Before production, implement the following.

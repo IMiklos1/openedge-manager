@@ -16,17 +16,26 @@ The audit found the following issues on the starting branch.
 
 ## Verification
 
-| Check | Result |
+| Check | Evidence |
 | --- | --- |
-| Docker Compose configuration | Validated default, `agent`, `smoke`, explicit agent override, and trusted build CA configurations. |
-| Pinned images and locked dependencies | Resolved and built on Linux amd64 using Docker Engine 29.9.2 and Compose 2.40.3. A BuildKit CA secret supplied the test environment's TLS proxy trust. |
-| Backend and frontend | Backend container started and passed PostgreSQL readiness. Frontend `tsc -b` and `vite build` passed in the Docker build. |
-| Live integration | **6/6 passed** in a fresh Compose project. Covered real MiNiFi Java heartbeat (200) and persisted `FULLY_APPLIED` ACK (204), duplicate and conflicting ACKs, C2 validation, API/UI proxy, Redis, and signed S3 object I/O with anonymous access denied. |
-| Dependency advisory scans | `npm audit` and `pip-audit` for both Python lockfiles reported zero known vulnerabilities at verification time. |
-| Platform coverage | Ran Linux amd64 containers. Verified Linux amd64 and arm64 manifests for the pinned MiNiFi and SeaweedFS images. Windows PowerShell, native Windows agents, and Linux arm64 execution were untested. |
+| Merged baseline, `c61fc28` | The [main-branch CI run](https://github.com/IMiklos1/openedge-manager/actions/runs/44392719547) passed. The merged Compose suite also passed 6/6 locally. |
+| Compose on Linux amd64 | Default, `agent`, `smoke`, explicit agent override, and trusted build CA configurations validated. The backend and frontend built, and all six normal `agent` stack services became healthy. Local execution used Docker Engine 29.9.2 and Compose 2.40.3. The build used a trusted CA secret for this environment's TLS proxy. |
+| Exact runtime artifacts | Pulled the official Java 2.12.0 and C++ 1.1.0 images. Both image indices advertise Linux amd64 and arm64. The real C2 heartbeat reported `minifi-java` and version `2.12.0`. See [ADR-007](DECISIONS.md#adr-007--retain-minifi-java-for-the-verified-integration) for platform coverage and the footprint comparison. |
+| Real Java heartbeat and ACK | **8/8** tests passed in the updated smoke profile. The fixture forwarded real Java requests to the API. Tests matched agent ID, class, runtime version, hostname, OS, and architecture to PostgreSQL and management API values. A later heartbeat advanced `last_seen`. |
+| Command correlation | A real `DESCRIBE MANIFEST` response contained operation `4372520b-e23b-4d46-a5a8-69fb6f89dd40`. The agent returned the same ID and `FULLY_APPLIED`, which PostgreSQL stored. The following heartbeat returned an empty operation list. Additional checks covered identical replay, a conflicting outcome, a mismatched reported agent, and an unknown operation. |
+| Service integration | UI and API proxy, Redis, signed SeaweedFS object I/O, and anonymous S3 denial passed. |
 
-Apache MiNiFi Java wire behavior was checked against the pinned upstream
-[Java C2 client and protocol sources](https://github.com/apache/nifi/tree/19f4df8e048e91d87d3e4967c69b1298f9dbe450/c2).
+Run the suite using the exact [PowerShell or Bash commands in the README](../README.md#run-the-automated-smoke-tests).
+
+**Verified scope.** Linux amd64 Compose, the isolated plaintext Java C2 registration and
+read-only command round trip, persistence of reported inventory and ACK, and supporting
+service readiness.
+
+**Unverified scope.** Windows PowerShell execution and native Windows agents, Linux ARM64
+execution, runtime status expiry when an agent stops, authenticated device identity and mTLS,
+device reconnect/retry and failover, flow deployment and rollback, and processor execution.
+The Linux image manifests and release artifacts establish availability. The C++ run was an
+idle footprint comparison. C++ C2 compatibility with OEM remains unverified.
 
 ## Phase 0 — Runtime spike (2–3 weeks)
 

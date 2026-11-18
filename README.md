@@ -31,26 +31,29 @@ On Bash, use `test -f .env || cp .env.example .env` and the same Compose command
 ## Run the automated smoke tests
 
 Use a fresh Compose project so the suite observes a new C2 operation and acknowledgement.
-In PowerShell:
+Run these commands from the repository root in PowerShell with Docker Desktop in Linux container mode.
 
 ```powershell
 $smokeProject = "openedge-smoke-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
-$env:MINIFI_PROBE_AGENT_ID = "oem-test-agent-01"
+$env:MINIFI_PROBE_AGENT_ID = "oem-smoke-agent-01"
 $env:OEM_API_PORT = "0"
 $env:OEM_UI_PORT = "0"
-docker compose -p $smokeProject --profile smoke config --quiet
-docker compose -p $smokeProject --profile smoke up --build --exit-code-from smoke
-$smokeExit = $LASTEXITCODE
-docker compose -p $smokeProject --profile smoke down
-Remove-Item Env:MINIFI_PROBE_AGENT_ID, Env:OEM_API_PORT, Env:OEM_UI_PORT
-if ($smokeExit -ne 0) { throw "Compose smoke tests failed (exit $smokeExit)." }
+try {
+    docker compose -p $smokeProject --profile smoke config --quiet
+    if ($LASTEXITCODE -ne 0) { throw "Compose config failed ($LASTEXITCODE)." }
+    docker compose -p $smokeProject --profile smoke up --build --exit-code-from smoke
+    if ($LASTEXITCODE -ne 0) { throw "Compose smoke tests failed ($LASTEXITCODE)." }
+} finally {
+    docker compose -p $smokeProject --profile smoke down
+    Remove-Item Env:MINIFI_PROBE_AGENT_ID, Env:OEM_API_PORT, Env:OEM_UI_PORT
+}
 ```
 
 On Bash:
 
 ```bash
 smoke_project="openedge-smoke-$(date +%s)-$$"
-MINIFI_PROBE_AGENT_ID=oem-test-agent-01 OEM_API_PORT=0 OEM_UI_PORT=0 \
+MINIFI_PROBE_AGENT_ID=oem-smoke-agent-01 OEM_API_PORT=0 OEM_UI_PORT=0 \
   docker compose -p "$smoke_project" --profile smoke up --build --exit-code-from smoke
 smoke_exit=$?
 docker compose -p "$smoke_project" --profile smoke down
@@ -58,9 +61,16 @@ test "$smoke_exit" -eq 0
 ```
 
 Port `0` asks Docker for available loopback ports. The tests run inside the Compose network.
-They check the Java agent's actual heartbeat and ACK, API readiness and the UI proxy, Redis, and a
-signed S3 put/get/delete. Test results and platform coverage are in the
-[implementation plan](docs/IMPLEMENTATION_PLAN.md).
+The `smoke` profile starts `oem-smoke-agent-01` from the same pinned Java image as the
+`agent` profile. A test-only HTTP observer forwards its real traffic to the backend. The suite
+compares the observed heartbeat with the API and PostgreSQL, then matches the command ID in the
+heartbeat response to the Java ACK and persisted outcome. It also checks UI/API readiness, Redis,
+and signed S3 object I/O. A successful run prints `Observed Java oem-smoke-agent-01 acknowledge
+DESCRIBE MANIFEST <id> as FULLY_APPLIED` and `Ran 8 tests`.
+
+For smoke-test diagnostics before cleanup, run
+`docker compose -p $smokeProject --profile smoke logs --tail 100 api c2-observer minifi-smoke-agent smoke`.
+Test results and platform coverage are in the [implementation plan](docs/IMPLEMENTATION_PLAN.md).
 
 ## Troubleshooting
 

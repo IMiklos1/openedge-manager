@@ -29,10 +29,10 @@ media type or encoding, 413 for an oversized body, and 422 for an invalid messag
 | Method | Path | Behavior |
 | --- | --- | --- |
 | POST | `/c2-protocol/heartbeat` | Requires `agentInfo.identifier`. Accepts agent class, manifest version and device metadata. Upserts inventory and returns HTTP 200 with a `requestedOperations` array. |
-| POST | `/c2-protocol/acknowledge` | Requires `operationId` and `operationState.state`. Records the first outcome and returns HTTP 204 with an empty body, including for an identical replay. An unknown operation returns 404 and a conflicting state returns 409. |
+| POST | `/c2-protocol/acknowledge` | Requires `operationId` and `operationState.state`. If supplied, `agentInfo.identifier` must match the probe target. Records the first outcome and returns HTTP 204 with an empty body, including for an identical replay. An unknown operation or agent mismatch returns 404. A conflicting state returns 409. |
 
 The array is normally empty. With `MINIFI_PROBE_AGENT_ID` set, the matching test agent can
 receive one persistent operation with `identifier`, `operation: "DESCRIBE"`, and
 `operand: "MANIFEST"`. Supported ACK states from the pinned client are `FULLY_APPLIED`, `PARTIALLY_APPLIED`, `OPERATION_NOT_UNDERSTOOD`,
-`NO_OPERATION`, and `NOT_APPLIED`. The operation confirms the C2 round trip. Deployment state
+`NO_OPERATION`, and `NOT_APPLIED`. The Java client supplies agent information on a successful manifest ACK. Some failure ACKs omit it and are correlated by operation ID. Deployment state
 and additional ACK metadata are outside this contract.
