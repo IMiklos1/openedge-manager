@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     postgres_user: str = "oem"
     postgres_password: str | None = None
     minifi_probe_agent_id: str = ""
+    minifi_flow_agent_id: str = ""
 
     def database_connection(self) -> str | URL:
         if self.database_url:

@@ -1,5 +1,7 @@
 # Capability status must be verified against the exact pinned MiNiFi Java build.
 CATALOG = {
+    "GenerateFlowFile": {"category": "Test", "runtime": ["minifi-java"], "status": "SUPPORTED"},
+    "LogAttribute": {"category": "Test", "runtime": ["minifi-java"], "status": "SUPPORTED"},
     "GetFile": {"category": "Files", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},
     "TailFile": {"category": "Files", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},
     "PutFile": {"category": "Files", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},

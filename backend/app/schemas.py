@@ -35,11 +35,12 @@ class FlowDefinition(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 class FlowCreate(BaseModel):
-    id: str
-    name: str
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[^\x00]+$")
+    name: str = Field(min_length=1, max_length=255, pattern=r"^[^\x00]+$")
     description: str | None = None
     definition: FlowDefinition
 
 class DeploymentCreate(BaseModel):
     flow_id: str
-    target_class: str
+    target_class: str | None = Field(default=None, min_length=1, max_length=100)
+    agent_id: str | None = Field(default=None, min_length=1, max_length=128)
