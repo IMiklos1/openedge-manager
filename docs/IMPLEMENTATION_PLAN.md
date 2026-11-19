@@ -55,6 +55,28 @@ Use the [PowerShell walkthrough and test commands](../README.md#create-and-deplo
 to reproduce the flow. Native Windows and ARM64 execution, arbitrary processor properties,
 deployment expiry, authenticated enrollment, and fleet rollback are unverified.
 
+## Edge management workspace
+
+The workspace covers local flow creation, typed processor and connection editing, draft
+revisions, published artifact selection, agent inventory, observed class activity, and
+deployment history. Revision 0003 preserves the current saved graph during migration
+and adds storage for subsequent versions and indexes for deployment queries.
+
+The configurable Java profile includes GenerateFlowFile and LogAttribute, literal
+dynamic attributes on GenerateFlowFile, timer-driven scheduling, and bounded queue
+settings. The default Compose integration has one explicitly enabled development
+target. Published revisions can be deployed again to that target.
+
+Broader CEM workflows including authenticated enrollment, multi-agent staged rollout,
+role-based access, class administration, remote diagnostics, lifecycle control, fleet
+events, controller services, and cross-platform runtime qualification are planned.
+Product references document the target lifecycle. The pinned Apache Java source defines
+the supported runtime contract.
+
+[Cloudera Edge Management](https://www.cloudera.com/products/data-in-motion/edge-management.html) ·
+[Cloudera Agent Manager](https://docs.cloudera.com/cem/latest/using-cem/topics/cem-managing-agents.html) ·
+[Apache MiNiFi System Admin Guide](https://github.com/apache/nifi/blob/main/minifi/minifi-docs/src/main/markdown/System_Admin_Guide.md#config-file)
+
 ## Phase 0 — Runtime spike (2–3 weeks)
 
 Expand the tested runtime/build matrix to Windows x64 and Linux ARM64. Verify processor

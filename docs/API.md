@@ -5,15 +5,21 @@ Management routes use `/api/v1` except for readiness at `/health`.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` (root) | API and database readiness |
-| GET | `/agents` | List agents |
-| GET | `/catalog` | Processor catalogue |
+| GET | `/agents` | List agents by class or ID/hostname search with heartbeat freshness |
+| GET | `/agent-classes` | List observed classes and recent check-in counts |
+| GET | `/catalog` | Processor catalogue and supported configuration fields |
+| GET | `/flow-editor` | Supported queue settings and runtime version |
 | POST | `/agents/{id}/heartbeat` | OEM development heartbeat only |
 | POST | `/flows` | Create draft flow |
 | GET | `/flows` | List flows |
-| GET | `/flows/{id}` | Read flow |
+| GET | `/flows/{id}` | Read latest saved flow |
+| PUT | `/flows/{id}` | Save an updated graph as a revision using `expected_version` |
+| GET | `/flows/{id}/versions` | List saved revisions and published digests |
+| GET | `/flows/{id}/versions/{version}` | Read a specific revision |
 | POST | `/flows/{id}/publish` | Compile and publish an immutable Java artifact |
 | POST | `/deployments` | Queue a published flow for one enabled agent |
 | GET | `/deployments/{id}` | Read deployment and acknowledgement status |
+| GET | `/deployments` | List history filtered by agent, flow, or state |
 
 Production requirements: OIDC login, RBAC, per-agent mTLS identity, idempotency keys,
 pagination, audit events, rate limits, request-size limits and versioned OpenAPI.
@@ -61,3 +67,22 @@ A successful agent ACK (`FULLY_APPLIED` or `NO_OPERATION`) sets `ACKNOWLEDGED`.
 `runStatus: "RUNNING"`. A negative ACK sets `FAILED`. Replaying the same ACK retains the
 recorded timestamp. The deployment status includes `ack_state`, `acknowledged_at`, and
 `applied_at`.
+
+
+## Versioned workspace
+
+The canonical graph preserves processor `config`, `attributes`, `scheduling`, `description`,
+`position`, and relationship termination settings. Connections retain names, relationships
+and `queue` settings. The catalog exposes the typed contract for fields available on the
+pinned Java profile. The API preserves invalid drafts and reports validation errors against
+node/connection IDs. Publication compiles only valid graphs. With `?version=` specified,
+publication returns 409 if the caller's draft is behind the latest saved revision.
+
+An explicit `version` in a deployment request selects an already published artifact.
+Omitting it requires the latest saved revision to be published. Published artifacts have separate
+immutable digest records, so subsequent draft changes preserve existing deployments.
+
+List endpoints accept `offset` and `limit`. Agent health is derived from last-seen time
+with a 30-second window. `RECENT` means a heartbeat was received within that window.
+Class counts are based on reported agent classes. These data complement C2 deployment
+status and leave the legacy inventory `status` field intact.

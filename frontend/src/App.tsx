@@ -1,66 +1,147 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
-  ReactFlow, Background, Controls, MiniMap, addEdge, useNodesState, useEdgesState,
-  type Connection, type Node
+  ReactFlow, Background, BackgroundVariant, Controls, MiniMap, addEdge, useNodesState, useEdgesState,
+  Handle, Position, type Connection, type Edge, type Node, type NodeProps,
 } from '@xyflow/react'
-import { Activity, Boxes, GitBranch, Server, Workflow } from 'lucide-react'
-import { apiBase, apiRequest, type Agent, type Deployment, type Draft, type PublishedFlow } from './api'
+import { Boxes, GitBranch, Plus, Server, Workflow, Cpu, Cable, Layers3 } from 'lucide-react'
+import {
+  apiBase, apiRequest, type Agent, type Catalog, type Definition, type Deployment, type Draft, type Field,
+  type FlowConnection, type FlowSummary, type Processor, type PublishedFlow, type Revision, type StoredFlow,
+} from './api'
+import { ConnectionInspector, ProcessorInspector } from './Inspector'
+import { AgentInventory, DeploymentInventory, Pagination, pageSize } from './Inventory'
 
-const initialNodes: Node[] = [
-  { id: 'n1', position: { x: 80, y: 100 }, data: { label: 'GetFile' }, type: 'input' },
-  { id: 'n2', position: { x: 340, y: 100 }, data: { label: 'RouteOnAttribute' } },
-  { id: 'n3', position: { x: 620, y: 100 }, data: { label: 'PublishMQTT' }, type: 'output' }
-]
-const initialEdges = [
-  { id: 'e1-2', source: 'n1', target: 'n2', label: 'success' },
-  { id: 'e2-3', source: 'n2', target: 'n3', label: 'matched' }
-]
-const demoNodes: Node[] = [
-  { id: 'generate', position: { x: 100, y: 110 }, data: { label: 'GenerateFlowFile' } },
-  { id: 'log', position: { x: 380, y: 110 }, data: { label: 'LogAttribute' } }
-]
-const demoEdges = [{ id: 'generated-file', source: 'generate', target: 'log', label: 'success' }]
+type GraphNode = Node<{ processor: Processor }, 'processor'>
+type GraphEdge = Edge<{ connection: FlowConnection }>
+type Selection = { kind: 'node' | 'edge'; id: string }
+
+function ProcessorCard({ data, selected }: NodeProps<GraphNode>) {
+  const { processor } = data
+  return <div className={`processor-card ${selected ? 'selected' : ''}`}>
+    {processor.type !== 'GenerateFlowFile' && <Handle position={Position.Left} type="target"/>}
+    <div className="processor-icon"><Cpu size={18}/></div>
+    <div><strong>{processor.label || processor.type}</strong>
+      <small>{processor.scheduling?.state === 'DISABLED' ? 'Disabled' : processor.type}</small></div>
+    <Handle position={Position.Right} type="source"/>
+  </div>
+}
+
+const nodeTypes = { processor: ProcessorCard }
+
+function canvasNode(processor: Processor, index: number): GraphNode {
+  return {
+    id: processor.id, type: 'processor',
+    position: processor.position ?? { x: 100 + (index % 3) * 270, y: 100 + Math.floor(index / 3) * 110 },
+    ariaLabel: `Configure ${processor.label || processor.type}`,
+    data: { processor },
+  }
+}
+
+function canvasEdge(connection: FlowConnection): GraphEdge {
+  return {
+    id: connection.id, source: connection.source, target: connection.target,
+    label: connection.label || connection.source_relationship,
+    data: { connection },
+  }
+}
+
+const emptyFlow: Definition = {
+  schema_version: '1.0', flow_id: '', name: 'Untitled flow', description: null,
+  target_class: 'unassigned', nodes: [], connections: [], parameters: {},
+}
+const testFlow: Definition = {
+  ...emptyFlow, name: 'MiNiFi test flow',
+  nodes: [
+    { id: 'generate', type: 'GenerateFlowFile', config: {}, position: { x: 100, y: 160 } },
+    { id: 'log', type: 'LogAttribute', config: {}, position: { x: 380, y: 160 } },
+  ],
+  connections: [{ id: 'generated-file', source: 'generate', target: 'log', source_relationship: 'success' }],
+}
+
+const navItems = [
+  { id: 'designer', title: 'Flow Manager', icon: GitBranch },
+  { id: 'agents', title: 'Edge Agents', icon: Server },
+  { id: 'deployments', title: 'Deployments', icon: Boxes },
+] as const
 
 export default function App() {
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
-  const [tab, setTab] = useState('designer')
-  const [name, setName] = useState('Demo Edge Flow')
-  const [status, setStatus] = useState('Local editor demo')
+  const [nodes, setNodes, onNodesChange] = useNodesState<GraphNode>([])
+  const [edges, setEdges, onEdgesChange] = useEdgesState<GraphEdge>([])
+  const [metadata, setMetadata] = useState<Definition>(emptyFlow)
+  const [tab, setTab] = useState<typeof navItems[number]['id']>('designer')
+  const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
-  const [saved, setSaved] = useState<{ draft: Draft; snapshot: string }>()
-  const [published, setPublished] = useState<PublishedFlow>()
+  const [saved, setSaved] = useState<{ draft: Draft; snapshot: string; digest?: string }>()
+  const [readOnly, setReadOnly] = useState(false)
+  const [selection, setSelection] = useState<Selection>()
+  const [catalog, setCatalog] = useState<Catalog>()
+  const [queueFields, setQueueFields] = useState<Record<string, Field>>({})
+  const [catalogError, setCatalogError] = useState('')
+  const [flows, setFlows] = useState<FlowSummary[]>()
+  const [flowOffset, setFlowOffset] = useState(0)
+  const [history, setHistory] = useState<Revision[]>([])
+  const [catalogQuery, setCatalogQuery] = useState('')
+  const [canvasKey, setCanvasKey] = useState(0)
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState('')
   const [deployment, setDeployment] = useState<Deployment>()
   const [agentError, setAgentError] = useState(false)
-  const onConnect = useCallback((connection: Connection) => setEdges((current) => addEdge(connection, current)), [setEdges])
-  const definition = {
-    schema_version: '1.0', name,
-    nodes: nodes.map(node => ({ id: node.id, type: String(node.data.label), config: {} })),
-    connections: edges.map(edge => ({
-      id: edge.id, source: edge.source, target: edge.target, source_relationship: String(edge.label || 'success'),
-    })),
+  const [deploymentFilter, setDeploymentFilter] = useState('')
+
+  const definition: Definition = {
+    ...metadata,
+    nodes: nodes.map(node => ({ ...node.data.processor, position: node.position })),
+    connections: edges.map(edge => edge.data!.connection),
   }
   const snapshot = JSON.stringify(definition)
-  const savedCurrent = saved?.snapshot === snapshot
+  const dirty = saved ? saved.snapshot !== snapshot : nodes.length > 0 || metadata.name !== emptyFlow.name || !!metadata.description
+  const savedCurrent = saved && !dirty
   const activeDeployment = deployment && !['APPLIED', 'FAILED'].includes(deployment.status)
   const eligibleAgents = agents.filter(agent => agent.can_deploy_flow)
+  const node = selection?.kind === 'node' ? nodes.find(item => item.id === selection.id) : undefined
+  const edge = selection?.kind === 'edge' ? edges.find(item => item.id === selection.id) : undefined
+  const errors = savedCurrent ? saved.draft.validation_errors : []
+  const title = navItems.find(item => item.id === tab)?.title
+
+  const onConnect = (connection: Connection) => {
+    const id = crypto.randomUUID()
+    const next = canvasEdge({ id, source: connection.source, target: connection.target, source_relationship: 'success' })
+    setEdges(current => addEdge(next, current))
+  }
 
   useEffect(() => {
     let current = true
-    const refresh = () => {
-      apiRequest<Agent[]>('/agents').then(rows => {
-        if (current) {
-          setAgents(rows)
-          setAgentError(false)
-        }
-      }).catch(() => { if (current) setAgentError(true) })
-    }
-    refresh()
+    Promise.all([apiRequest<Catalog>('/catalog'), apiRequest<{ queue: Record<string, Field> }>('/flow-editor')])
+      .then(([options, editor]) => {
+        if (current) { setCatalog(options); setQueueFields(editor.queue) }
+      }).catch(error => { if (current) setCatalogError(error.message) })
+    const refresh = () => apiRequest<Agent[]>('/agents?deployable=true').then(rows => {
+      if (current) { setAgents(rows); setAgentError(false) }
+    }).catch(() => { if (current) setAgentError(true) })
+    void refresh()
     const timer = window.setInterval(refresh, 5000)
     return () => { current = false; window.clearInterval(timer) }
   }, [])
+
+  const loadFlows = async (offset: number) => {
+    const rows = await apiRequest<FlowSummary[]>(`/flows?offset=${offset}&limit=${pageSize}`)
+    setFlows(rows)
+  }
+  useEffect(() => {
+    let current = true
+    setFlows(undefined)
+    apiRequest<FlowSummary[]>(`/flows?offset=${flowOffset}&limit=${pageSize}`)
+      .then(rows => { if (current) setFlows(rows) })
+      .catch(error => { if (current) setStatus(error.message) })
+    return () => { current = false }
+  }, [flowOffset])
+
+  useEffect(() => {
+    if (!dirty) return
+    const protect = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', protect)
+    return () => window.removeEventListener('beforeunload', protect)
+  }, [dirty])
 
   const deploymentId = deployment?.id
   useEffect(() => {
@@ -68,11 +149,8 @@ export default function App() {
     let current = true
     const timer = window.setInterval(async () => {
       try {
-        const result = await apiRequest<Deployment>(`/deployments/${encodeURIComponent(deploymentId)}`)
-        if (current) {
-          setDeployment(result)
-          setStatus(`Deployment ${result.status}${result.ack_state ? ` (${result.ack_state})` : ''}`)
-        }
+        const next = await apiRequest<Deployment>(`/deployments/${encodeURIComponent(deploymentId)}`)
+        if (current) setDeployment(next)
       } catch {
         if (current) setStatus('Could not refresh deployment. Retrying…')
       }
@@ -90,73 +168,194 @@ export default function App() {
       setBusy(false)
     }
   }
+
+  function displayFlow(next: Definition, record?: StoredFlow, historical = false) {
+    const nextNodes = next.nodes.map(canvasNode)
+    setMetadata(next)
+    setNodes(nextNodes)
+    setEdges(next.connections.map(canvasEdge))
+    setSaved(record ? {
+      draft: record,
+      snapshot: JSON.stringify({ ...next, nodes: nextNodes.map(item => ({ ...item.data.processor, position: item.position })) }),
+      digest: record.published_sha256 ?? undefined,
+    } : undefined)
+    setReadOnly(historical)
+    setSelection(undefined)
+    setCanvasKey(current => current + 1)
+  }
+
+  const replace = (next: Definition) => {
+    if (dirty && !window.confirm('Discard unsaved changes?')) return
+    displayFlow(next)
+    setHistory([])
+    setStatus('')
+  }
+
+  const openFlow = (id: string, version?: number) => {
+    if (dirty && !window.confirm('Discard unsaved changes?')) return
+    void run(async () => {
+      const path = `/flows/${encodeURIComponent(id)}`
+      const [record, revisions] = await Promise.all([
+        apiRequest<StoredFlow>(version === undefined ? path : `${path}/versions/${version}`),
+        apiRequest<Revision[]>(`${path}/versions`),
+      ])
+      displayFlow(record.definition, record, version !== undefined)
+      setHistory(revisions)
+      setStatus('')
+    })
+  }
+
   const addProcessor = (type: string) => {
-    const id = crypto.randomUUID()
-    setNodes(current => [...current, {
-      id, position: { x: 160 + current.length * 35, y: 250 + (current.length % 3) * 35 }, data: { label: type },
-    }])
+    const processor: Processor = { id: crypto.randomUUID(), type, config: {} }
+    setNodes(current => [...current, canvasNode(processor, current.length)])
+    setSelection({ kind: 'node', id: processor.id })
   }
-  const loadTestFlow = () => {
-    if (nodes.length && !savedCurrent && !window.confirm('Replace the current canvas with the test flow?')) return
-    setNodes(demoNodes)
-    setEdges(demoEdges)
-    setName('MiNiFi test flow')
-    setSaved(undefined)
-    setPublished(undefined)
-    setStatus('Test flow loaded. Save a draft to continue.')
-  }
+
   const saveDraft = () => run(async () => {
-    const id = crypto.randomUUID()
-    const draft = await apiRequest<Draft>('/flows', { id, name, definition: { ...definition, flow_id: id } })
-    setSaved({ draft, snapshot })
-    setPublished(undefined)
-    setStatus(draft.validation_errors.length ? draft.validation_errors.join(' ') : `Draft saved (v${draft.version}).`)
-  })
-  const publishFlow = () => run(async () => {
-    if (!savedCurrent || !saved) return
-    const artifact = await apiRequest<PublishedFlow>(`/flows/${encodeURIComponent(saved.draft.id)}/publish`, {})
-    setPublished(artifact)
-    setStatus(`Published v${artifact.version} for MiNiFi Java ${artifact.runtime_version}.`)
-  })
-  const deployFlow = () => run(async () => {
-    if (!published || !agentId || !savedCurrent) return
-    const queued = await apiRequest<Deployment>('/deployments', { flow_id: published.id, agent_id: agentId })
-    setDeployment(queued)
-    setStatus(`Deployment ${queued.status}`)
+    const id = saved?.draft.id ?? crypto.randomUUID()
+    const next = { ...definition, flow_id: id }
+    const payload = { name: next.name, description: next.description, definition: next }
+    const draft = saved
+      ? await apiRequest<Draft>(`/flows/${encodeURIComponent(id)}`, { ...payload, expected_version: saved.draft.version }, 'PUT')
+      : await apiRequest<Draft>('/flows', { ...payload, id })
+    setMetadata(current => ({ ...current, flow_id: id }))
+    setSaved({ draft, snapshot: JSON.stringify(next) })
+    setStatus(`Draft saved (v${draft.version}).`)
+    const revisions = await apiRequest<Revision[]>(`/flows/${encodeURIComponent(id)}/versions`)
+    setHistory(revisions)
+    await loadFlows(flowOffset)
   })
 
-  return <div className="shell">
-    <aside className="sidebar">
-      <div className="brand"><div className="logo"><Workflow /></div><div><b>OpenEdge</b><small>MANAGER</small></div></div>
-      <div className="navlabel">PLATFORM</div>
-      <button className={tab === 'designer' ? 'nav active' : 'nav'} onClick={() => setTab('designer')}><GitBranch size={17}/> Flow Designer</button>
-      <button className={tab === 'agents' ? 'nav active' : 'nav'} onClick={() => setTab('agents')}><Server size={17}/> Edge Agents</button>
-      <button className={tab === 'deployments' ? 'nav active' : 'nav'} onClick={() => setTab('deployments')}><Boxes size={17}/> Deployments</button>
-      <div className="sidebarbottom"><Activity size={15}/> Development preview</div>
-    </aside>
-    <main className="main">
-      <header><div><span className="eyebrow">EDGE CONTROL PLANE / {tab.toUpperCase()}</span><h1>{tab === 'designer' ? 'Flow Designer' : tab === 'agents' ? 'Edge Agents' : 'Deployments'}</h1></div><div className="userpill">LOCAL · DEV</div></header>
-      {tab === 'designer' ? <>
-        <div className="toolbar"><div className="tools">
-          {['GenerateFlowFile','LogAttribute','GetFile','TailFile','InvokeHTTP','PublishMQTT','ListenTCP','RouteOnAttribute'].map(x => <button key={x} onClick={() => addProcessor(x)}>{x}</button>)}
-        </div></div>
-        <div className="flow-actions">
-          <button onClick={loadTestFlow} disabled={busy}>Load test flow</button>
-          <label>Flow name <input value={name} maxLength={255} onChange={event => setName(event.target.value)}/></label>
-          <button onClick={saveDraft} disabled={busy || !name.trim() || savedCurrent}>Save draft</button>
-          <button onClick={publishFlow} disabled={busy || !savedCurrent || !!published}>Publish flow</button>
-          <label>Test agent <select value={agentId} onChange={event => setAgentId(event.target.value)}>
-            <option value="">{agentError ? 'Agent lookup failed' : eligibleAgents.length ? 'Select an agent' : 'No enabled test agent'}</option>
-            {eligibleAgents.map(agent => <option key={agent.id} value={agent.id}>{agent.id}</option>)}
-          </select></label>
-          <button className="primary" onClick={deployFlow}
-            disabled={busy || !published || !savedCurrent || !agentId || !!activeDeployment || !eligibleAgents.some(agent => agent.id === agentId)}>
-            Deploy flow
-          </button>
+  const publishFlow = () => run(async () => {
+    if (!savedCurrent || !saved) return
+    const path = `/flows/${encodeURIComponent(saved.draft.id)}`
+    const artifact = await apiRequest<PublishedFlow>(`${path}/publish?version=${saved.draft.version}`, {})
+    setSaved({ ...saved, digest: artifact.sha256 })
+    setStatus(`Published v${artifact.version} for MiNiFi Java ${artifact.runtime_version}.`)
+    setHistory(await apiRequest<Revision[]>(`${path}/versions`))
+    await loadFlows(flowOffset)
+  })
+
+  const deployFlow = () => run(async () => {
+    if (!savedCurrent || !saved.digest || !agentId) return
+    const queued = await apiRequest<Deployment>('/deployments', {
+      flow_id: saved.draft.id, version: saved.draft.version, agent_id: agentId,
+    })
+    setDeployment(queued)
+    setStatus('')
+  })
+
+  return <div className="app-shell">
+    <header className="global-header">
+      <div className="brand"><div className="logo"><Workflow size={22}/></div><div><b>OpenEdge</b><small>Manager</small></div></div>
+      <nav aria-label="Workspace">{navItems.map(({ id, title, icon: Icon }) => <button key={id}
+        className={tab === id ? 'active' : ''} aria-current={tab === id ? 'page' : undefined}
+        onClick={() => { if (id === 'deployments') setDeploymentFilter(''); setTab(id) }}><Icon size={16}/>{title}</button>)}</nav>
+      <a className="api-link" href={`${apiBase}/docs`} target="_blank" rel="noreferrer">API docs</a>
+    </header>
+    <main>
+      <div className="page-heading"><h1>{title}</h1>{tab === 'designer' && <span className="runtime">MiNiFi Java</span>}</div>
+      {tab === 'designer' && <div className="workspace">
+        <aside className="library" aria-label="Flow library">
+          <div className="library-heading"><Layers3 size={16}/><h2>Flows</h2><button className="icon-button" aria-label="New flow"
+            disabled={busy} onClick={() => replace(emptyFlow)}><Plus size={17}/></button></div>
+          <button className="template-button" disabled={busy} onClick={() => replace(testFlow)}>Load test flow</button>
+          <div className="flow-list">
+            {!flows ? <p className="muted">Loading flows…</p> : !flows.length ? <p className="muted">No saved flows.</p>
+              : flows.map(flow => <button className={saved?.draft.id === flow.id ? 'current-flow' : ''} key={flow.id}
+                type="button" disabled={busy} onClick={() => openFlow(flow.id)}>
+                <strong>{flow.name}</strong><small>v{flow.version} · {flow.status === 'PUBLISHED' ? 'Published' : 'Draft'}</small>
+              </button>)}
+          </div>
+          <Pagination count={flows?.length ?? 0} offset={flowOffset} change={setFlowOffset}/>
+          {saved && <div className="revision-list"><h2>Versions</h2>
+            {readOnly && <button disabled={busy} onClick={() => openFlow(saved.draft.id)}>Open latest</button>}
+            {history.map(item => <button key={item.version} disabled={busy}
+              className={saved.draft.version === item.version ? 'current-flow' : ''}
+              onClick={() => openFlow(saved.draft.id, item.version)}>
+              v{item.version} <small>{item.sha256 ? 'Published' : 'Draft'}</small>
+            </button>)}</div>}
+        </aside>
+        <div className="editor">
+          <div className="editor-bar">
+            <label className="input-field flow-name">Flow name<input value={metadata.name} maxLength={255} disabled={readOnly}
+              onChange={event => setMetadata({ ...metadata, name: event.target.value })}/></label>
+            <button onClick={saveDraft} disabled={readOnly || busy || !metadata.name.trim() || !dirty}>Save draft</button>
+            <button onClick={publishFlow} disabled={readOnly || busy || !savedCurrent || !!saved?.digest || errors.length > 0}>Publish flow</button>
+            <label className="input-field">Test agent<select aria-label="Test agent" value={agentId} onChange={event => setAgentId(event.target.value)}>
+              <option value="">{agentError ? 'Agent lookup failed' : eligibleAgents.length ? 'Select an agent' : 'No enabled test agent'}</option>
+              {eligibleAgents.map(agent => <option key={agent.id} value={agent.id}>{agent.id}</option>)}
+            </select></label>
+            <button className="primary" onClick={deployFlow}
+              disabled={busy || !savedCurrent || !saved?.digest || !eligibleAgents.some(agent => agent.id === agentId) || !!activeDeployment}>Deploy flow</button>
+          </div>
+          <div className="editor-message" role="status">
+            <span>{status || (readOnly ? 'Saved version · read only' : dirty ? 'Unsaved changes' : saved?.digest ? 'Published' : '')}</span>
+            {deployment && <span className={`badge ${deployment.status.toLowerCase()}`}>
+              Deployment {deployment.status}{deployment.ack_state ? ` (${deployment.ack_state})` : ''}
+            </span>}
+          </div>
+          <div className="editor-grid">
+            <div className="graph-region">
+              <div className="palette">
+                <div className="palette-utilities">
+                  <label>Processor palette<input type="search" value={catalogQuery} placeholder="Search processors"
+                    onChange={event => setCatalogQuery(event.target.value)}/></label>
+                  {edges.length > 0 && <select aria-label="Inspect connection"
+                    value={selection?.kind === 'edge' ? selection.id : ''}
+                    onChange={event => setSelection(event.target.value ? { kind: 'edge', id: event.target.value } : undefined)}>
+                    <option value="">Inspect connection</option>
+                    {edges.map(item => <option key={item.id} value={item.id}>
+                      {item.data?.connection.label || item.data?.connection.source_relationship || 'Connection'}
+                    </option>)}
+                  </select>}
+                </div>
+                <div className="palette-options">
+                  {catalogError && <p role="alert">{catalogError}</p>}
+                  {!catalog && !catalogError && <span className="muted">Loading catalog…</span>}
+                  {Object.entries(catalog ?? {}).filter(([kind]) => kind.toLowerCase().includes(catalogQuery.toLowerCase()))
+                    .map(([kind, item]) => <button key={kind} disabled={readOnly || busy} className={!item.configuration ? 'draft-option' : ''}
+                      title={item.configuration ? item.category : 'Draft only in this runtime profile'}
+                      onClick={() => addProcessor(kind)}>{kind}</button>)}
+                </div>
+              </div>
+              <div className="canvas">
+                <ReactFlow key={canvasKey} nodeTypes={nodeTypes} nodes={nodes} edges={edges} fitView minZoom={0.25}
+                  nodesDraggable={!readOnly} nodesConnectable={!readOnly} deleteKeyCode={readOnly ? null : 'Delete'}
+                  onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
+                  onNodeClick={(_, selected) => setSelection({ kind: 'node', id: selected.id })}
+                  onEdgeClick={(_, selected) => setSelection({ kind: 'edge', id: selected.id })}
+                  onPaneClick={() => setSelection(undefined)}>
+                  <Background variant={BackgroundVariant.Dots} gap={20} size={1.4}/><MiniMap/><Controls/>
+                </ReactFlow>
+                <span className="canvas-count"><Cable size={14}/>{nodes.length} processors · {edges.length} connections</span>
+              </div>
+            </div>
+            {node ? <ProcessorInspector key={node.id} node={node.data.processor}
+              schema={catalog?.[node.data.processor.type]?.configuration} disabled={readOnly}
+              errors={errors.filter(error => error.startsWith(`Node ${node.id}`) &&
+                [',', ':'].includes(error[`Node ${node.id}`.length] ?? ''))}
+              change={processor => setNodes(current => current.map(item => item.id === node.id
+                ? { ...item, ariaLabel: `Configure ${processor.label || processor.type}`, data: { processor } } : item))}/>
+              : edge ? <ConnectionInspector key={edge.id} connection={edge.data!.connection} queue={queueFields}
+                errors={errors.filter(error => error.startsWith(`Connection ${edge.id}:`) || error.startsWith(`Connection ${edge.id},`))}
+                disabled={readOnly} change={connection => setEdges(current => current.map(item => item.id === edge.id
+                  ? { ...item, data: { connection }, label: connection.label || connection.source_relationship } : item))}/>
+                : <aside className="inspector">
+                  <div className="inspector-title"><h2>Flow settings</h2></div>
+                  <div className="inspector-content">
+                    <label className="input-field">Description<textarea rows={4} value={metadata.description ?? ''} disabled={readOnly}
+                      onChange={event => setMetadata({ ...metadata, description: event.target.value || null })}/></label>
+                    {catalog && nodes.length > 0 && <p className="muted">Select a processor or connection to edit its configuration.</p>}
+                  </div>
+                </aside>}
+          </div>
+          {errors.length > 0 && <div className="validation-panel"><h2>Validation issues</h2>
+            <ul>{errors.map((error, index) => <li key={index}>{error}</li>)}</ul></div>}
         </div>
-        <div className="canvas"><ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} fitView><Background/><MiniMap/><Controls/></ReactFlow></div>
-        <div className="statusbar" role="status"><span className="dot"/> {status}<span className="spacer"/> {nodes.length} processors · {edges.length} connections</div>
-      </> : <section className="placeholder"><div className="placeholdericon"><Server/></div><h2>{tab === 'agents' ? 'Agent inventory API foundation' : 'Deployment lifecycle foundation'}</h2><p>Inspect the starter API and schemas through the interactive documentation.</p><a href={`${apiBase}/docs`} target="_blank" rel="noreferrer">Open API documentation ↗</a></section>}
+      </div>}
+      {tab === 'agents' && <AgentInventory showDeployments={id => { setDeploymentFilter(id); setTab('deployments') }}/>}
+      {tab === 'deployments' && <DeploymentInventory key={deploymentFilter} initialAgent={deploymentFilter}/>}
     </main>
   </div>
 }
