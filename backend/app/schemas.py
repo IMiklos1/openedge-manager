@@ -27,6 +27,19 @@ class NodeConfig(BaseModel):
     scheduling: dict[str, Any] = Field(default_factory=dict)
     attributes: dict[str, str] = Field(default_factory=dict)
     auto_terminate_success: bool | None = None
+    auto_terminate: list[str] | None = None
+    retry_relationships: list[str] = Field(default_factory=list)
+
+
+class ControllerService(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    type: str
+    label: str | None = None
+    description: str | None = None
+    state: Literal["ENABLED", "DISABLED"] = "ENABLED"
+    config: dict[str, Any] = Field(default_factory=dict)
+    attributes: dict[str, str] = Field(default_factory=dict)
 
 class Connection(BaseModel):
     id: str
@@ -44,6 +57,7 @@ class FlowDefinition(BaseModel):
     target_class: str = "unassigned"
     nodes: list[NodeConfig]
     connections: list[Connection]
+    controller_services: list[ControllerService] = Field(default_factory=list)
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 class FlowCreate(BaseModel):

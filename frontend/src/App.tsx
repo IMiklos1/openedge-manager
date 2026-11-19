@@ -1,24 +1,24 @@
 import { useEffect, useState } from 'react'
 import {
-  ReactFlow, Background, BackgroundVariant, Controls, MiniMap, addEdge, useNodesState, useEdgesState,
+  ReactFlow, Background, BackgroundVariant, Controls, MiniMap, useNodesState, useEdgesState,
   Handle, Position, type Connection, type Edge, type Node, type NodeProps,
 } from '@xyflow/react'
 import { Boxes, GitBranch, Plus, Server, Workflow, Cpu, Cable, Layers3 } from 'lucide-react'
 import {
-  apiBase, apiRequest, type Agent, type Catalog, type Definition, type Deployment, type Draft, type Field,
+  apiBase, apiRequest, sourceRelationships, type Agent, type Catalog, type ControllerService, type Definition, type Deployment, type Draft, type FlowEditor,
   type FlowConnection, type FlowSummary, type Processor, type PublishedFlow, type Revision, type StoredFlow,
 } from './api'
-import { ConnectionInspector, ProcessorInspector } from './Inspector'
+import { ConnectionInspector, ProcessorInspector, ServiceInspector } from './Inspector'
 import { AgentInventory, DeploymentInventory, Pagination, pageSize } from './Inventory'
 
-type GraphNode = Node<{ processor: Processor }, 'processor'>
+type GraphNode = Node<{ processor: Processor; inputForbidden?: boolean }, 'processor'>
 type GraphEdge = Edge<{ connection: FlowConnection }>
-type Selection = { kind: 'node' | 'edge'; id: string }
+type Selection = { kind: 'node' | 'edge' | 'service'; id: string }
 
 function ProcessorCard({ data, selected }: NodeProps<GraphNode>) {
   const { processor } = data
   return <div className={`processor-card ${selected ? 'selected' : ''}`}>
-    {processor.type !== 'GenerateFlowFile' && <Handle position={Position.Left} type="target"/>}
+    {!data.inputForbidden && processor.type !== 'GenerateFlowFile' && <Handle position={Position.Left} type="target"/>}
     <div className="processor-icon"><Cpu size={18}/></div>
     <div><strong>{processor.label || processor.type}</strong>
       <small>{processor.scheduling?.state === 'DISABLED' ? 'Disabled' : processor.type}</small></div>
@@ -75,7 +75,10 @@ export default function App() {
   const [readOnly, setReadOnly] = useState(false)
   const [selection, setSelection] = useState<Selection>()
   const [catalog, setCatalog] = useState<Catalog>()
-  const [queueFields, setQueueFields] = useState<Record<string, Field>>({})
+  const [editor, setEditor] = useState<FlowEditor>()
+  const [serviceType, setServiceType] = useState('')
+  const [wireSource, setWireSource] = useState('')
+  const [wireTarget, setWireTarget] = useState('')
   const [catalogError, setCatalogError] = useState('')
   const [flows, setFlows] = useState<FlowSummary[]>()
   const [flowOffset, setFlowOffset] = useState(0)
@@ -84,7 +87,7 @@ export default function App() {
   const [canvasKey, setCanvasKey] = useState(0)
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState('')
-  const [deployment, setDeployment] = useState<Deployment>()
+  const [deployments, setDeployments] = useState<Record<string, Deployment>>({})
   const [agentError, setAgentError] = useState(false)
   const [deploymentFilter, setDeploymentFilter] = useState('')
 
@@ -94,26 +97,44 @@ export default function App() {
     connections: edges.map(edge => edge.data!.connection),
   }
   const snapshot = JSON.stringify(definition)
-  const dirty = saved ? saved.snapshot !== snapshot : nodes.length > 0 || metadata.name !== emptyFlow.name || !!metadata.description
+  const dirty = saved ? saved.snapshot !== snapshot : nodes.length > 0 || !!metadata.controller_services?.length || metadata.name !== emptyFlow.name || !!metadata.description
   const savedCurrent = saved && !dirty
+  const deployment = deployments[agentId]
   const activeDeployment = deployment && !['APPLIED', 'FAILED'].includes(deployment.status)
   const eligibleAgents = agents.filter(agent => agent.can_deploy_flow)
   const node = selection?.kind === 'node' ? nodes.find(item => item.id === selection.id) : undefined
   const edge = selection?.kind === 'edge' ? edges.find(item => item.id === selection.id) : undefined
+  const service = selection?.kind === 'service' ? metadata.controller_services?.find(item => item.id === selection.id) : undefined
+  const serviceOptions = (metadata.controller_services ?? []).map(item => ({
+    id: item.id, name: item.label || item.type, apis: editor?.controller_services[item.type]?.apis.map(api => api.className) ?? [],
+  }))
   const errors = savedCurrent ? saved.draft.validation_errors : []
   const title = navItems.find(item => item.id === tab)?.title
 
-  const onConnect = (connection: Connection) => {
+  function relationshipsOf(id: string) {
+    const source = nodes.find(item => item.id === id)?.data.processor
+    return source ? sourceRelationships(source, catalog?.[source.type]?.configuration) : []
+  }
+
+  const onConnect = ({ source, target }: Pick<Connection, 'source' | 'target'>) => {
+    if (!source || !target || !nodes.some(item => item.id === target) || !relationshipsOf(source).length) return
+    if (nodes.find(item => item.id === target)?.data.inputForbidden) return
+    const options = relationshipsOf(source)
+    const preferred = options.includes('success') ? ['success', ...options.filter(item => item !== 'success')] : options
+    const relationship = preferred.find(item => !edges.some(edge => edge.source === source && edge.target === target
+      && edge.data?.connection.source_relationship === item))
+    if (!relationship) return
     const id = crypto.randomUUID()
-    const next = canvasEdge({ id, source: connection.source, target: connection.target, source_relationship: 'success' })
-    setEdges(current => addEdge(next, current))
+    const next = canvasEdge({ id, source, target, source_relationship: relationship })
+    setEdges(current => [...current, next])
+    setSelection({ kind: 'edge', id })
   }
 
   useEffect(() => {
     let current = true
-    Promise.all([apiRequest<Catalog>('/catalog'), apiRequest<{ queue: Record<string, Field> }>('/flow-editor')])
+    Promise.all([apiRequest<Catalog>('/catalog'), apiRequest<FlowEditor>('/flow-editor')])
       .then(([options, editor]) => {
-        if (current) { setCatalog(options); setQueueFields(editor.queue) }
+        if (current) { setCatalog(options); setEditor(editor) }
       }).catch(error => { if (current) setCatalogError(error.message) })
     const refresh = () => apiRequest<Agent[]>('/agents?deployable=true').then(rows => {
       if (current) { setAgents(rows); setAgentError(false) }
@@ -150,7 +171,7 @@ export default function App() {
     const timer = window.setInterval(async () => {
       try {
         const next = await apiRequest<Deployment>(`/deployments/${encodeURIComponent(deploymentId)}`)
-        if (current) setDeployment(next)
+        if (current && next.agent_id) setDeployments(previous => ({ ...previous, [next.agent_id!]: next }))
       } catch {
         if (current) setStatus('Could not refresh deployment. Retrying…')
       }
@@ -170,7 +191,7 @@ export default function App() {
   }
 
   function displayFlow(next: Definition, record?: StoredFlow, historical = false) {
-    const nextNodes = next.nodes.map(canvasNode)
+    const nextNodes = next.nodes.map(graphNode)
     setMetadata(next)
     setNodes(nextNodes)
     setEdges(next.connections.map(canvasEdge))
@@ -179,6 +200,8 @@ export default function App() {
       snapshot: JSON.stringify({ ...next, nodes: nextNodes.map(item => ({ ...item.data.processor, position: item.position })) }),
       digest: record.published_sha256 ?? undefined,
     } : undefined)
+    setWireSource('')
+    setWireTarget('')
     setReadOnly(historical)
     setSelection(undefined)
     setCanvasKey(current => current + 1)
@@ -205,9 +228,23 @@ export default function App() {
     })
   }
 
+  function graphNode(processor: Processor, index: number) {
+    const result = canvasNode(processor, index)
+    result.data.inputForbidden = catalog?.[processor.type]?.configuration?.inputRequirement === 'INPUT_FORBIDDEN'
+    return result
+  }
+
+  const addService = () => {
+    if (!serviceType) return
+    const next: ControllerService = { id: crypto.randomUUID(), type: serviceType, config: {} }
+    setMetadata(current => ({ ...current, controller_services: [...(current.controller_services ?? []), next] }))
+    setSelection({ kind: 'service', id: next.id })
+    setServiceType('')
+  }
+
   const addProcessor = (type: string) => {
     const processor: Processor = { id: crypto.randomUUID(), type, config: {} }
-    setNodes(current => [...current, canvasNode(processor, current.length)])
+    setNodes(current => [...current, graphNode(processor, current.length)])
     setSelection({ kind: 'node', id: processor.id })
   }
 
@@ -241,7 +278,7 @@ export default function App() {
     const queued = await apiRequest<Deployment>('/deployments', {
       flow_id: saved.draft.id, version: saved.draft.version, agent_id: agentId,
     })
-    setDeployment(queued)
+    setDeployments(current => ({ ...current, [agentId]: queued }))
     setStatus('')
   })
 
@@ -282,9 +319,9 @@ export default function App() {
               onChange={event => setMetadata({ ...metadata, name: event.target.value })}/></label>
             <button onClick={saveDraft} disabled={readOnly || busy || !metadata.name.trim() || !dirty}>Save draft</button>
             <button onClick={publishFlow} disabled={readOnly || busy || !savedCurrent || !!saved?.digest || errors.length > 0}>Publish flow</button>
-            <label className="input-field">Test agent<select aria-label="Test agent" value={agentId} onChange={event => setAgentId(event.target.value)}>
-              <option value="">{agentError ? 'Agent lookup failed' : eligibleAgents.length ? 'Select an agent' : 'No enabled test agent'}</option>
-              {eligibleAgents.map(agent => <option key={agent.id} value={agent.id}>{agent.id}</option>)}
+            <label className="input-field">Target agent<select aria-label="Target agent" value={agentId} onChange={event => setAgentId(event.target.value)}>
+              <option value="">{agentError ? 'Agent lookup failed' : eligibleAgents.length ? 'Select an agent' : 'No eligible agent'}</option>
+              {eligibleAgents.map(agent => <option key={agent.id} value={agent.id}>{agent.id}{agent.health === 'STALE' ? ' (stale)' : ''}</option>)}
             </select></label>
             <button className="primary" onClick={deployFlow}
               disabled={busy || !savedCurrent || !saved?.digest || !eligibleAgents.some(agent => agent.id === agentId) || !!activeDeployment}>Deploy flow</button>
@@ -313,10 +350,40 @@ export default function App() {
                 <div className="palette-options">
                   {catalogError && <p role="alert">{catalogError}</p>}
                   {!catalog && !catalogError && <span className="muted">Loading catalog…</span>}
-                  {Object.entries(catalog ?? {}).filter(([kind]) => kind.toLowerCase().includes(catalogQuery.toLowerCase()))
+                  {Object.entries(catalog ?? {}).filter(([kind, entry]) => [kind, ...(entry.configuration?.tags ?? [])]
+                    .some(value => value.toLowerCase().includes(catalogQuery.toLowerCase())))
                     .map(([kind, item]) => <button key={kind} disabled={readOnly || busy} className={!item.configuration ? 'draft-option' : ''}
                       title={item.configuration ? item.category : 'Draft only in this runtime profile'}
                       onClick={() => addProcessor(kind)}>{kind}</button>)}
+                </div>
+                <div className="palette-utilities graph-controls">
+                  {nodes.length > 1 && !readOnly && <div className="add-connection">
+                    <select aria-label="Connection source" value={wireSource} onChange={event => setWireSource(event.target.value)}>
+                      <option value="">Choose source</option>
+                      {nodes.map(item => <option key={item.id} value={item.id}>{item.data.processor.label || item.data.processor.type}</option>)}
+                    </select>
+                    <select aria-label="Connection destination" value={wireTarget} onChange={event => setWireTarget(event.target.value)}>
+                      <option value="">Choose destination</option>
+                      {nodes.filter(item => !item.data.inputForbidden && item.id !== wireSource).map(item =>
+                        <option key={item.id} value={item.id}>{item.data.processor.label || item.data.processor.type}</option>)}
+                    </select>
+                    <button disabled={!wireSource || !wireTarget || wireSource === wireTarget} onClick={() =>
+                      onConnect({ source: wireSource, target: wireTarget })}>Add connection</button>
+                  </div>}
+                  {editor && <div className="add-connection">
+                    <select aria-label="Controller service type" value={serviceType} disabled={readOnly || busy}
+                      onChange={event => setServiceType(event.target.value)}>
+                      <option value="">Controller service type</option>
+                      {Object.keys(editor.controller_services).map(kind => <option key={kind}>{kind}</option>)}
+                    </select>
+                    <button onClick={addService} disabled={readOnly || busy || !serviceType}>Add service</button>
+                    {!!serviceOptions.length && <select aria-label="Inspect controller service"
+                      value={service?.id ?? ''} onChange={event => setSelection(event.target.value
+                        ? { kind: 'service', id: event.target.value } : undefined)}>
+                      <option value="">Inspect controller service</option>
+                      {serviceOptions.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}
+                    </select>}
+                  </div>}
                 </div>
               </div>
               <div className="canvas">
@@ -333,14 +400,31 @@ export default function App() {
             </div>
             {node ? <ProcessorInspector key={node.id} node={node.data.processor}
               schema={catalog?.[node.data.processor.type]?.configuration} disabled={readOnly}
+              services={serviceOptions} relationships={relationshipsOf(node.id)}
+              connected={edges.filter(item => item.source === node.id).map(item => item.data!.connection.source_relationship)}
               errors={errors.filter(error => error.startsWith(`Node ${node.id}`) &&
                 [',', ':'].includes(error[`Node ${node.id}`.length] ?? ''))}
               change={processor => setNodes(current => current.map(item => item.id === node.id
-                ? { ...item, ariaLabel: `Configure ${processor.label || processor.type}`, data: { processor } } : item))}/>
-              : edge ? <ConnectionInspector key={edge.id} connection={edge.data!.connection} queue={queueFields}
+                ? { ...item, ariaLabel: `Configure ${processor.label || processor.type}`, data: { ...item.data, processor } } : item))}/>
+              : edge ? <ConnectionInspector key={edge.id} connection={edge.data!.connection} queue={editor?.queue ?? {}}
+                relationships={relationshipsOf(edge.source)}
                 errors={errors.filter(error => error.startsWith(`Connection ${edge.id}:`) || error.startsWith(`Connection ${edge.id},`))}
-                disabled={readOnly} change={connection => setEdges(current => current.map(item => item.id === edge.id
+                disabled={readOnly} remove={() => {
+                  setEdges(current => current.filter(item => item.id !== edge.id))
+                  setSelection(undefined)
+                }} change={connection => setEdges(current => current.map(item => item.id === edge.id
                   ? { ...item, data: { connection }, label: connection.label || connection.source_relationship } : item))}/>
+              : service && editor?.controller_services[service.type] ? <ServiceInspector key={service.id} service={service}
+                schema={editor.controller_services[service.type]} services={serviceOptions} disabled={readOnly}
+                errors={errors.filter(error => error.startsWith(`Controller service ${service.id}:`)
+                  || error.startsWith(`Controller service ${service.id},`))}
+                change={next => setMetadata(current => ({ ...current, controller_services: current.controller_services?.map(item =>
+                  item.id === next.id ? next : item) }))}
+                remove={() => {
+                  setMetadata(current => ({ ...current, controller_services: current.controller_services?.filter(item =>
+                    item.id !== service.id) }))
+                  setSelection(undefined)
+                }}/>
                 : <aside className="inspector">
                   <div className="inspector-title"><h2>Flow settings</h2></div>
                   <div className="inspector-content">

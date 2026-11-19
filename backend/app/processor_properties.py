@@ -1,6 +1,9 @@
 """Configuration contract for the processors shipped and tested with MiNiFi Java 2.12.0."""
 
+import math
 import re
+
+from .catalog import CONTROLLER_SERVICES, PROCESSORS
 
 
 CHARSETS = ["UTF-8", "US-ASCII", "ISO-8859-1", "UTF-16", "UTF-16BE", "UTF-16LE"]
@@ -10,7 +13,7 @@ SIZE = re.compile(r"(\d{1,8}) *(B|KB|MB)")
 SAFE_ATTRIBUTE_REGEX = re.compile(r"\^?[\w.-]+(?:\|[\w.-]+)*\$?", re.ASCII)
 
 
-PROCESSORS = {
+LEGACY_PROPERTIES = {
     "GenerateFlowFile": {
         "description": "Generate test data on the edge.",
         "dynamic_properties": True,
@@ -63,12 +66,104 @@ QUEUE_FIELDS = {
 }
 
 
-def processor_schema(kind: str) -> dict:
-    return PROCESSORS[kind] | {
-        "scheduling": SCHEDULING_FIELDS | {
-            "period": SCHEDULING_FIELDS["period"] | {"default": "5 sec" if kind == "GenerateFlowFile" else "1 sec"},
-        },
+def component_properties(component):
+    result = {}
+    for key, descriptor in component["properties"].items():
+        choices = descriptor.get("choices", [])
+        options = [choice["value"] for choice in choices]
+        default = descriptor.get("defaultValue")
+        field = {
+            "type": "choice" if options else "text",
+            "label": descriptor.get("displayName", key),
+            "description": descriptor.get("description"),
+            "required": descriptor.get("required", False),
+            "sensitive": descriptor.get("sensitive", False),
+            "expression_scope": descriptor.get("expressionLanguageScope", "NONE"),
+            "dependencies": descriptor.get("dependencies", {}),
+        }
+        if options:
+            field.update(choices=options, choice_labels={item["value"]: item["displayName"] for item in choices})
+        if set(value.lower() for value in options) == {"true", "false"}:
+            field["type"] = "boolean"
+        if field["type"] == "text":
+            field.update(multiline=True, max=32768)
+        if default is not None and not field["sensitive"]:
+            field["default"] = default
+        if service := descriptor.get("service"):
+            field.update(type="service", service=service)
+        if descriptor.get("dynamicallyModifiesClasspath"):
+            field["modifies_classpath"] = True
+        result[key] = field
+    return result
+
+
+def component_schema(kind, component, processor=False):
+    properties = component_properties(component)
+    if legacy := LEGACY_PROPERTIES.get(kind):
+        for name, field in legacy["properties"].items():
+            properties[name].update(field, legacy=True, multiline=field.get("multiline", False), expression_scope="NONE")
+    schema = component | {
+        "properties": properties, "dynamic_properties": bool(component.get("dynamic")),
     }
+    if processor:
+        schedule = component.get("defaultSchedule", {})
+        tasks = SCHEDULING_FIELDS["tasks"] | {"default": int(schedule.get("concurrentTasks", 1))}
+        if component.get("triggerSerially"):
+            tasks["max"] = 1
+        schema["scheduling"] = SCHEDULING_FIELDS | {
+            "period": SCHEDULING_FIELDS["period"] | {
+                "default": "5 sec" if kind == "GenerateFlowFile" else schedule.get("period", "1 sec"),
+            },
+            "tasks": tasks,
+        }
+    return schema
+
+
+PROCESSOR_SCHEMAS = {kind: component_schema(kind, component, processor=True) for kind, component in PROCESSORS.items()}
+SERVICE_SCHEMAS = {kind: component_schema(kind, component) for kind, component in CONTROLLER_SERVICES.items()}
+
+
+def available_relationships(kind, properties, dynamic):
+    available = set(PROCESSORS[kind]["relationships"])
+    if kind == "DistributeLoad":
+        number = str(properties.get("Number of Relationships", "1"))
+        if re.fullmatch(r"[0-9]{1,3}", number):
+            available = {str(i) for i in range(1, int(number) + 1)}
+    elif kind == "RouteOnAttribute" and properties.get("Routing Strategy", "Route to Property name") != "Route to Property name":
+        available.add("matched")
+    elif kind == "RouteText" and properties.get("Routing Strategy", "Route to each matching Property Name") != "Route to each matching Property Name":
+        available.add("matched")
+    elif PROCESSORS[kind].get("dynamicRelationship"):
+        available.update(dynamic)
+    return available
+
+
+def requirement_applies(field, values):
+    return all(name in values and values[name] != "" and (not options or values[name] in options)
+               for name, options in field["dependencies"].items())
+
+
+def property_text(value):
+    if isinstance(value, bool):
+        return str(value).lower()
+    if type(value) is int or (type(value) is float and math.isfinite(value)):
+        return str(value)
+    if isinstance(value, str) and len(value) <= 32768 and "\x00" not in value:
+        return value
+    raise ValueError("Use a finite scalar value of at most 32768 characters.")
+
+
+def validate_secret_fields(definition):
+    errors = []
+    for entries, schemas in ((definition.get("nodes", []), PROCESSOR_SCHEMAS),
+                             (definition.get("controller_services", []), SERVICE_SCHEMAS)):
+        for entry in entries:
+            fields = schemas.get(entry["type"], {}).get("properties", {})
+            for values in (entry.get("config", {}), entry.get("attributes", {})):
+                for name, value in values.items():
+                    if fields.get(name, {}).get("sensitive") and value not in (None, ""):
+                        errors.append(f"Component {entry['id']}, {name}: sensitive values cannot be stored in a draft.")
+    return errors
 
 
 def checked_value(value, field):
@@ -121,24 +216,77 @@ def resolve_fields(values, fields, scope, errors):
     return result
 
 
-def resolve_processor(node, errors):
-    scope = f"Node {node['id']}"
-    schema = processor_schema(node["type"])
-    props = resolve_fields(node.get("config", {}), schema["properties"], scope, errors)
-    scheduling = resolve_fields(node.get("scheduling", {}), schema["scheduling"], scope, errors)
-    dynamic = node.get("attributes", {})
+def resolve_properties(component, schema, services, scope, errors):
+    fields = schema["properties"]
+    config = component.get("config", {})
+    raw = {key: field["default"] for key, field in fields.items() if "default" in field}
+    overrides = {}
+    for key, value in config.items():
+        field = fields.get(key)
+        if field is None:
+            errors.append(f"{scope}, {key}: unknown property. Use Dynamic properties when available.")
+            continue
+        if field["sensitive"]:
+            if value not in ("", None):
+                errors.append(f"{scope}, {key}: sensitive values are unavailable.")
+            continue
+        try:
+            value = checked_value(value, field) if field.get("legacy") else property_text(value)
+            value = property_text(value)
+            expression = "${" in value
+            if "#{" in value:
+                raise ValueError("Parameter contexts are unavailable.")
+            if expression and field["expression_scope"] == "NONE":
+                raise ValueError("This property does not support Expression Language.")
+            if field.get("choices") and not expression and value not in field["choices"]:
+                if field["type"] == "boolean":
+                    value = next((option for option in field["choices"] if option.lower() == value.lower()), value)
+                if value not in field["choices"]:
+                    raise ValueError("Choose a supported value.")
+            if field["type"] == "service" and value and field["service"] not in services.get(value, set()):
+                raise ValueError("Select a configured compatible controller service.")
+            overrides[key] = value
+        except ValueError as exc:
+            errors.append(f"{scope}, {key}: {exc}")
+    effective = {key: property_text(value) for key, value in (raw | overrides).items()}
+    for key, field in fields.items():
+        if field["required"] and requirement_applies(field, effective) and not effective.get(key):
+            message = "required sensitive property cannot be supplied." if field["sensitive"] else "enter a required value."
+            errors.append(f"{scope}, {key}: {message}")
+    dynamic = component.get("attributes", {})
     if dynamic and not schema["dynamic_properties"]:
-        errors.append(f"{scope}: this processor has no dynamic attributes.")
+        errors.append(f"{scope}: this component has no declared dynamic properties.")
     for key, value in dynamic.items():
-        if not ATTRIBUTE_NAME.fullmatch(key) or key in schema["properties"]:
-            errors.append(f"{scope}, {key}: enter a distinct attribute name.")
-        else:
-            try:
-                props[key] = checked_value(value, {"type": "text", "max": 256})
-            except ValueError as exc:
-                errors.append(f"{scope}, {key}: {exc}")
-    if "Custom Text" in props and (props.get("Data Format") != "Text" or props.get("Unique FlowFiles")):
+        if not key.strip() or len(key) > 512 or "\x00" in key or key in fields:
+            errors.append(f"{scope}, {key}: enter a distinct dynamic property name.")
+            continue
+        try:
+            if component["type"] == "GenerateFlowFile":
+                if not ATTRIBUTE_NAME.fullmatch(key):
+                    raise ValueError("Enter a valid FlowFile attribute name.")
+                value = checked_value(value, {"type": "text", "max": 256})
+            if "#{" in value:
+                raise ValueError("Parameter contexts are unavailable.")
+            if "${" in value and not any(
+                descriptor.get("expressionLanguageScope", "NONE") != "NONE" for descriptor in schema.get("dynamic", [])
+            ):
+                raise ValueError("This dynamic property does not support Expression Language.")
+            overrides[key] = property_text(value)
+        except ValueError as exc:
+            errors.append(f"{scope}, {key}: {exc}")
+    if component["type"] == "GenerateFlowFile" and "Custom Text" in overrides and (
+        effective.get("Data Format") != "Text" or effective.get("Unique FlowFiles") == "true"
+    ):
         errors.append(f"{scope}, Custom Text: choose Text and turn off Unique FlowFiles.")
-    if scheduling["retry_success"] and scheduling["retry_count"] == 0:
-        errors.append(f"{scope}: Retry success requires a positive retry count.")
-    return {key: str(value).lower() if isinstance(value, bool) else str(value) for key, value in props.items()}, scheduling
+    # Use NiFi's own defaults for the bundled components. Preserve OEM's previously published legacy defaults.
+    legacy_defaults = {key: property_text(field["default"]) for key, field in
+                       LEGACY_PROPERTIES.get(component["type"], {}).get("properties", {}).items() if "default" in field}
+    return legacy_defaults | overrides, effective
+
+
+def resolve_processor(node, services, errors):
+    scope = f"Node {node['id']}"
+    schema = PROCESSOR_SCHEMAS[node["type"]]
+    props, effective = resolve_properties(node, schema, services, scope, errors)
+    scheduling = resolve_fields(node.get("scheduling", {}), schema["scheduling"], scope, errors)
+    return props, scheduling, available_relationships(node["type"], effective, node.get("attributes", {}))

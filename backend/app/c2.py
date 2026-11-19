@@ -9,11 +9,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from .compiler import MINIFI_VERSION
+from .catalog import MINIFI_VERSION
 from .config import settings
 from .db import get_db
 from .models import Agent, C2Probe, Deployment
-from .delivery import UpdateConfiguration, acknowledge_flow_update, artifact_for, flow_update
+from .delivery import UpdateConfiguration, acknowledge_flow_update, artifact_components, artifact_for, flow_update, permits_execution
 
 router = APIRouter(prefix="/c2-protocol", tags=["MiNiFi C2"])
 MAX_BODY_BYTES = 4 * 1024 * 1024
@@ -26,10 +26,27 @@ class BuildInfo(BaseModel):
     version: RuntimeVersion | None = None
 
 
+class Extension(BaseModel):
+    type: Annotated[str, StringConstraints(min_length=1, max_length=512, pattern=r"^[^\x00]+$")]
+
+
+class ComponentManifest(BaseModel):
+    processors: list[Extension] | None = None
+    controllerServices: list[Extension] | None = None
+
+
+class AgentBundle(BaseModel):
+    group: RuntimeVersion
+    artifact: RuntimeVersion
+    version: RuntimeVersion
+    componentManifest: ComponentManifest | None = None
+
+
 class AgentManifest(BaseModel):
     agentType: Literal["minifi-java"] | None = None
     version: RuntimeVersion | None = None
     buildInfo: BuildInfo | None = None
+    bundles: list[AgentBundle] | None = None
 
 
 class AgentInfo(BaseModel):
@@ -132,6 +149,16 @@ def heartbeat(
         "architecture": system.machineArch if system else None,
     }
     values = {key: value for key, value in reported_values.items() if value}
+    if manifest and manifest.bundles is not None:
+        # Store only component identities, omitting descriptions, configuration and other wire metadata.
+        extensions = []
+        for bundle in manifest.bundles:
+            if bundle.componentManifest is None:
+                continue
+            coordinates = [bundle.group, bundle.artifact, bundle.version]
+            for entry in (bundle.componentManifest.processors or []) + (bundle.componentManifest.controllerServices or []):
+                extensions.append([entry.type, *coordinates])
+        values["capabilities"] = {"minifi_components": sorted(extensions)}
     seen_at = datetime.now(timezone.utc)
     values.update(runtime="minifi-java", status="ONLINE", last_seen=seen_at)
     insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
@@ -150,7 +177,7 @@ def heartbeat(
             operations.append(DescribeManifest(identifier=probe.operation_id))
     running_flow = payload.flowInfo.flowId if payload.flowInfo and payload.flowInfo.runStatus == "RUNNING" else None
     # Only a heartbeat from the pinned runtime may receive a compiled flow.
-    if info.identifier == settings.minifi_flow_agent_id and db.get(Agent, info.identifier).runtime_version == MINIFI_VERSION:
+    if info.identifier in settings.flow_agent_ids and db.get(Agent, info.identifier).runtime_version == MINIFI_VERSION:
         command = flow_update(db, info.identifier, running_flow, seen_at)
         if command is not None:
             operations.append(command)
@@ -190,11 +217,13 @@ def download_configuration(operation_id: AgentId, db: Annotated[Session, Depends
     if (
         deployment is None
         or not deployment.agent_id
-        or deployment.agent_id != settings.minifi_flow_agent_id
+        or deployment.agent_id not in settings.flow_agent_ids
         or deployment.status != "DISPATCHED"
     ):
         raise HTTPException(404, "No configuration for this operation")
     artifact = artifact_for(db, deployment)
+    if not permits_execution(artifact_components(artifact)):
+        raise HTTPException(404, "No configuration for this operation")
     return Response(
         artifact.content,
         media_type="application/json",

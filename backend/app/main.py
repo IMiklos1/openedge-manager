@@ -8,12 +8,12 @@ from sqlalchemy.orm import Session
 from .db import get_db
 from .models import Agent, Flow, Deployment, FlowArtifact, FlowRevision
 from .schemas import AgentHeartbeat, FlowCreate, FlowEdit, DeploymentCreate
-from .catalog import CATALOG
-from .compiler import CompileError, MINIFI_VERSION, compile_minifi_java_json, runtime_validation
+from .catalog import MINIFI_VERSION, UNBUNDLED
+from .compiler import CompileError, compile_minifi_java_json, runtime_validation
 from .config import settings
-from .delivery import ACTIVE, artifact_for
+from .delivery import ACTIVE, artifact_components, artifact_for, missing_agent_components, permits_execution
 from .migrate import upgrade_schema
-from .processor_properties import PROCESSORS, QUEUE_FIELDS, processor_schema
+from .processor_properties import PROCESSOR_SCHEMAS, QUEUE_FIELDS, SERVICE_SCHEMAS, validate_secret_fields
 from .c2 import router as minifi_c2_router
 
 
@@ -37,13 +37,22 @@ def health(db: Session = Depends(get_db)):
 
 @app.get("/api/v1/catalog")
 def catalog():
-    return {kind: entries | ({"configuration": processor_schema(kind)} if kind in PROCESSORS else {})
-            for kind, entries in CATALOG.items()}
+    return {
+        kind: {
+            "category": schema["bundle"]["artifact"], "runtime": ["minifi-java"],
+            "status": "SUPPORTED" if kind in {"GenerateFlowFile", "LogAttribute"} else "BUNDLED",
+            "configuration": schema,
+        }
+        for kind, schema in PROCESSOR_SCHEMAS.items()
+    } | {
+        kind: {"category": category, "runtime": ["custom-extension"], "status": "NOT_BUNDLED"}
+        for kind, category in UNBUNDLED.items()
+    }
 
 
 @app.get("/api/v1/flow-editor")
 def flow_editor():
-    return {"queue": QUEUE_FIELDS, "runtime_version": MINIFI_VERSION}
+    return {"queue": QUEUE_FIELDS, "runtime_version": MINIFI_VERSION, "controller_services": SERVICE_SCHEMAS}
 
 def agent_health(last_seen: datetime | None, recent: datetime) -> str:
     if last_seen is None:
@@ -66,7 +75,7 @@ def list_agents(
     if agent_class:
         query = query.where(Agent.agent_class == agent_class)
     if deployable:
-        query = query.where(Agent.id == settings.minifi_flow_agent_id,
+        query = query.where(Agent.id.in_(settings.flow_agent_ids),
                             Agent.runtime == "minifi-java", Agent.runtime_version == MINIFI_VERSION)
     if q:
         query = query.where(Agent.id.icontains(q, autoescape=True) | Agent.hostname.icontains(q, autoescape=True))
@@ -77,7 +86,7 @@ def list_agents(
         "architecture": a.architecture, "runtime": a.runtime,
         "runtime_version": a.runtime_version, "agent_class": a.agent_class,
         "status": a.status, "reported_flow_version": a.reported_flow_version,
-        "can_deploy_flow": a.id == settings.minifi_flow_agent_id and a.runtime == "minifi-java"
+        "can_deploy_flow": a.id in settings.flow_agent_ids and a.runtime == "minifi-java"
         and a.runtime_version == MINIFI_VERSION,
         "last_seen": a.last_seen.isoformat() if a.last_seen else None,
         "health": agent_health(a.last_seen, recent),
@@ -121,12 +130,14 @@ def list_flows(
 
 def flow_definition(payload: FlowCreate | FlowEdit, flow_id: str) -> dict:
     definition = payload.definition.model_dump()
+    if errors := validate_secret_fields(definition):
+        raise HTTPException(422, errors)
     description = payload.description if payload.description is not None else definition["description"]
     return definition | {"flow_id": flow_id, "name": payload.name, "description": description}
 
 
 def draft_result(flow_id: str, version: int, definition: dict) -> dict:
-    errors, _, _ = runtime_validation(definition)
+    errors, *_ = runtime_validation(definition)
     return {"id": flow_id, "version": version, "validation_errors": errors}
 
 
@@ -274,8 +285,8 @@ def create_deployment(payload: DeploymentCreate, db: Session = Depends(get_db)):
         db.commit()
         return deployment_result(deployment, None) | {"note": "Class-wide deployment is metadata only."}
 
-    if payload.agent_id != settings.minifi_flow_agent_id:
-        raise HTTPException(403, "Flow updates are enabled only for the configured development agent")
+    if payload.agent_id not in settings.flow_agent_ids:
+        raise HTTPException(403, "Flow updates are enabled only for configured agents")
     agent = db.get(Agent, payload.agent_id)
     if agent is None:
         raise HTTPException(404, "Agent has not checked in")
@@ -284,6 +295,11 @@ def create_deployment(payload: DeploymentCreate, db: Session = Depends(get_db)):
     artifact = artifact_for(db, deployment)
     if artifact is None:
         raise HTTPException(409, "Publish a compiled flow artifact before deployment")
+    components = artifact_components(artifact)
+    if not permits_execution(components):
+        raise HTTPException(403, "The target is not enabled for command execution processors")
+    if missing := missing_agent_components(agent, components):
+        raise HTTPException(409, "Agent manifest is missing required components: " + ", ".join(missing))
     deployment.agent_id = agent.id
     deployment.target_class = agent.agent_class
     db.add(deployment)

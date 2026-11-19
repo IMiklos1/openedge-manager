@@ -7,8 +7,8 @@ Management routes use `/api/v1` except for readiness at `/health`.
 | GET | `/health` (root) | API and database readiness |
 | GET | `/agents` | List agents by class or ID/hostname search with heartbeat freshness |
 | GET | `/agent-classes` | List observed classes and recent check-in counts |
-| GET | `/catalog` | Processor catalogue and supported configuration fields |
-| GET | `/flow-editor` | Supported queue settings and runtime version |
+| GET | `/catalog` | Bundled processor descriptors and legacy unbundled entries |
+| GET | `/flow-editor` | Queue settings, controller service descriptors and runtime version |
 | POST | `/agents/{id}/heartbeat` | OEM development heartbeat only |
 | POST | `/flows` | Create draft flow |
 | GET | `/flows` | List flows |
@@ -35,8 +35,8 @@ media type or encoding, 413 for an oversized body, and 422 for an invalid messag
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| POST | `/c2-protocol/heartbeat` | Requires `agentInfo.identifier`. Accepts agent class, manifest version and device metadata. Upserts inventory and returns HTTP 200 with a `requestedOperations` array. |
-| POST | `/c2-protocol/acknowledge` | Requires `operationId` and `operationState.state`. If supplied, `agentInfo.identifier` must match the probe target. Records the first outcome and returns HTTP 204 with an empty body, including for an identical replay. An unknown operation or agent mismatch returns 404. A conflicting state returns 409. |
+| POST | `/c2-protocol/heartbeat` | Requires `agentInfo.identifier`. Accepts agent class, manifest version, bundle components and device metadata. Upserts inventory and returns HTTP 200 with a `requestedOperations` array. |
+| POST | `/c2-protocol/acknowledge` | Requires `operationId` and `operationState.state`. If supplied, `agentInfo.identifier` must match the operation target. Records the first outcome and returns HTTP 204 with an empty body, including for an identical replay. An unknown operation or agent mismatch returns 404. A conflicting state returns 409. |
 
 A C2 configuration update uses `operation: "UPDATE"` and `operand: "CONFIGURATION"`.
 Its `identifier` is the deployment ID. The `args` object carries the artifact SHA-256
@@ -57,8 +57,11 @@ receive one persistent operation with `identifier`, `operation: "DESCRIBE"`, and
 Unsupported graphs and properties return 422 and leave the draft intact.
 
 `POST /api/v1/deployments` with `flow_id` and `agent_id` queues a published artifact for
-the local opt-in agent. A wrong target returns 403. An incompatible agent, unpublished
-artifact, or overlapping active deployment returns 409. A class-only request keeps the
+an agent explicitly enabled by `MINIFI_FLOW_AGENT_IDS` or `MINIFI_FLOW_AGENT_ID`.
+A disallowed target or execution policy returns 403. An incompatible runtime or missing
+manifest component, unpublished artifact, or overlapping active deployment returns 409.
+The first complete heartbeat supplies the processor and controller service coordinates
+required for compatibility checks. A class-only request keeps the
 legacy metadata-only behavior.
 
 A deployment moves from `PENDING` to `DISPATCHED` when offered in a heartbeat response.
@@ -72,8 +75,12 @@ recorded timestamp. The deployment status includes `ack_state`, `acknowledged_at
 ## Versioned workspace
 
 The canonical graph preserves processor `config`, `attributes`, `scheduling`, `description`,
-`position`, and relationship termination settings. Connections retain names, relationships
-and `queue` settings. The catalog exposes the typed contract for fields available on the
+`position`, `auto_terminate` and `retry_relationships`. Null or absent
+`auto_terminate` means terminate all unconnected relationships. Connections retain names,
+`source_relationship` and `queue` settings. `controller_services` holds service IDs, types,
+names, descriptions, state, property values and dynamic properties. A service reference
+uses the service's OEM ID as the property value. OEM resolves it to the compiler's stable UUID.
+Sensitive values are rejected with 422 before draft persistence. The catalog exposes the typed contract for fields available on the
 pinned Java profile. The API preserves invalid drafts and reports validation errors against
 node/connection IDs. Publication compiles only valid graphs. With `?version=` specified,
 publication returns 409 if the caller's draft is behind the latest saved revision.

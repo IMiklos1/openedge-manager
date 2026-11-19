@@ -157,3 +157,8 @@ td button { font-size: 12px; }
 
 .palette-utilities { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 7px; }
 .palette-utilities select { max-width: 100%; font-size: 12px; }
+
+.add-connection { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.add-connection select { max-width: 185px; }
+.add-connection button { font-size: 12px; }
+.field-help { font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }

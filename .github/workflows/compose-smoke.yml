@@ -23,6 +23,7 @@ jobs:
           docker compose config --quiet
           docker compose --profile agent config --quiet
           docker compose --profile smoke config --quiet
+          docker compose --profile agent --profile fleet config --quiet
       - run: docker compose --profile smoke up --build --exit-code-from smoke
       - if: always()
         run: docker compose --profile smoke down

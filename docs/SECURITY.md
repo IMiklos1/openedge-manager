@@ -10,11 +10,18 @@ the reported agent ID when supplied. That reported ID is unauthenticated. Java f
 supply just the operation ID. The optional probe issues only a read-only manifest request. The adapter bounds and validates C2 bodies and persists only selected
 inventory fields and the ACK state.
 
-Flow replacement is disabled by default. `MINIFI_FLOW_AGENT_ID` opts one disposable
-agent into the test path. The compiler accepts only allowlisted processors and bounded literal properties. Expression Language, parameter
-references and unrestricted regular expressions are excluded from the local compiler. The local download path is scoped to a dispatched operation. Agent IDs and
-operation IDs provide correlation in this local setup. Production rollout requires
-authenticated enrollment, scoped artifact access, and mTLS.
+Flow replacement is disabled by default. Set explicit target IDs using
+`MINIFI_FLOW_AGENT_IDS` or the legacy singular setting. Reported manifest components
+are checked for compatibility and the IDs constrain delivery in the local stack.
+These checks use claims from the agent. Production deployment requires authenticated
+enrollment, scoped artifact access, mTLS and authenticated management operations.
+
+The downloadable artifact can authorize filesystem access and interaction with services
+reachable from the device. Run it with least-privilege device permissions. The two
+bundled system command processors require `MINIFI_ALLOW_EXECUTION_PROCESSORS=true` to
+deploy. This limits those two types and other component behavior still depends on their
+deployment environment and properties. Sensitive descriptor values are rejected before
+draft persistence. Parameter contexts and remote secret distribution are pending.
 
 Before production, implement the following.
 1. TLS reverse proxy; no public plaintext endpoints.

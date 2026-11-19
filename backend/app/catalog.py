@@ -1,18 +1,14 @@
-# Capability status must be verified against the exact pinned MiNiFi Java build.
-CATALOG = {
-    "GenerateFlowFile": {"category": "Test", "runtime": ["minifi-java"], "status": "SUPPORTED"},
-    "LogAttribute": {"category": "Test", "runtime": ["minifi-java"], "status": "SUPPORTED"},
-    "GetFile": {"category": "Files", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},
-    "TailFile": {"category": "Files", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},
-    "PutFile": {"category": "Files", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},
-    "InvokeHTTP": {"category": "HTTP", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},
-    "ListenTCP": {"category": "TCP", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},
-    "ListenUDP": {"category": "TCP", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},
-    "PublishMQTT": {"category": "MQTT", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},
-    "ConsumeMQTT": {"category": "MQTT", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},
-    "ExecuteSQL": {"category": "SQL", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},
-    "PublishKafka": {"category": "Kafka", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},
-    "ConsumeKafka": {"category": "Kafka", "runtime": ["minifi-java"], "status": "VERIFY_BUILD"},
-    "ModbusRead": {"category": "Modbus", "runtime": ["custom-extension"], "status": "NOT_IMPLEMENTED"},
-    "OPCUARead": {"category": "OPC UA", "runtime": ["custom-extension"], "status": "NOT_IMPLEMENTED"}
+"""Metadata from the stock Apache MiNiFi Java image. See docs/PROCESSOR_CATALOG.md."""
+
+import json
+from pathlib import Path
+
+_catalog = json.loads(Path(__file__).with_name("minifi_catalog.json").read_text(encoding="utf-8"))
+MINIFI_VERSION = _catalog["runtime_version"]
+PROCESSORS = _catalog["processors"]
+CONTROLLER_SERVICES = _catalog["services"]
+
+# Retain the protocol placeholders used by existing saved drafts.
+UNBUNDLED = {
+    "ModbusRead": "Modbus", "OPCUARead": "OPC UA", "ConsumeKafka": "Kafka", "PublishKafka": "Kafka",
 }
