@@ -34,6 +34,8 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/agents
 The `agent` profile starts the official Apache MiNiFi Java 2.12.0 image pinned in
 [`compose.minifi.yaml`](compose.minifi.yaml). It registers as
 `oem-test-agent-01`, then checks in every five seconds without any published agent port.
+The default Compose configuration permits deployment to the bundled test agent IDs.
+The first full C2 heartbeat makes a checked-in test agent selectable in Flow Manager.
 The C2 routes are documented in [the API specification](docs/API.md). Omit
 `--profile agent` if you only need the control plane.
 
@@ -45,15 +47,17 @@ On Bash, use `test -f .env || cp .env.example .env` and the same Compose command
 Use a disposable local agent. A deployment replaces its active flow. From PowerShell:
 
 ```powershell
-$env:MINIFI_FLOW_AGENT_ID = "oem-test-agent-01"
 docker compose --profile agent up --build -d --wait
 ```
 
 Open **Flow Manager** at `http://127.0.0.1:5173`. Select **Load test flow**. Click a
 processor to edit its properties, scheduling, comments and relationships. Select a
 connection to configure its name, relationship and queue. Create and configure controller
-services from the designer's selector when a component needs one. Save the draft, then
-publish it. Select `oem-test-agent-01` under **Target agent** and click **Deploy flow**.
+services from the designer's selector when a component needs one. Save the draft and
+select `oem-test-agent-01` under **Target agent**. Click **Publish and deploy** to compile
+the saved revision and queue the update. You can also publish it separately and then
+click **Deploy flow**. Registered agents that cannot receive a deployment appear in
+the list with a reason.
 `ACKNOWLEDGED` records the agent's C2 result. `APPLIED` appears after a later heartbeat
 reports the published digest as the running flow. The test flow generates a one-byte FlowFile
 and sends it to LogAttribute.
@@ -134,10 +138,11 @@ Test results and platform coverage are in the [implementation plan](docs/IMPLEME
 
 Use disposable agents. The browser test creates draft revisions, configures and references
 JSON controller services, reads the saved graph, and deploys the two revisions to selected
-agents. The fleet profile adds a second independent agent for this test.
+agents. It verifies that an ineligible inventory entry is visible and disabled. The fleet
+profile adds a second independent agent for this test. Run with the default test target
+settings and a fresh Compose project.
 
 ```powershell
-$env:MINIFI_FLOW_AGENT_IDS = "oem-test-agent-01,oem-test-agent-02"
 docker compose --profile agent --profile fleet up --build -d --wait
 $env:OEM_BROWSER_SECOND_AGENT = "oem-test-agent-02"
 $env:OEM_CHROMIUM = "C:\Program Files\Google\Chrome\Application\chrome.exe"
@@ -150,7 +155,7 @@ docker compose --profile agent --profile fleet down
 On Linux with Chromium installed:
 
 ```bash
-MINIFI_FLOW_AGENT_IDS=oem-test-agent-01,oem-test-agent-02 docker compose --profile agent --profile fleet up --build -d --wait
+docker compose --profile agent --profile fleet up --build -d --wait
 npm --prefix frontend ci
 OEM_BROWSER_SECOND_AGENT=oem-test-agent-02 OEM_CHROMIUM=/usr/bin/chromium npm --prefix frontend run test:browser
 docker compose --profile agent --profile fleet down
@@ -161,13 +166,35 @@ To send both revisions to one local target, omit `OEM_BROWSER_SECOND_AGENT` and 
 
 ### Targeting a connected agent
 
-Set `MINIFI_FLOW_AGENT_IDS` to a comma-separated list of the unique identifiers that
-may receive flow updates. The singular `MINIFI_FLOW_AGENT_ID` remains supported.
+Compose defaults to the bundled `oem-test-agent-01` and `oem-test-agent-02` IDs. To
+target other devices, set `MINIFI_FLOW_AGENT_IDS` to a comma-separated list of the
+allowed IDs and recreate the API container with `docker compose up -d api`. The
+singular `MINIFI_FLOW_AGENT_ID` remains supported. Explicit IDs replace the Compose
+defaults. Set `MINIFI_ENABLE_COMPOSE_TEST_TARGETS=false` to disable the defaults
+when you have no explicit targets.
 For a Java agent on a separate machine to appear as a deployment target, configure its
 outbound C2 base URL and identifier, enable its full heartbeat, and use a trusted
 network and the same pinned runtime components. Compose binds its control plane to
 loopback for development. Production access needs authenticated management and agent
 ingress. [C2 API](docs/API.md#minifi-java-2120-c2) · [Security](docs/SECURITY.md)
+
+For the native Java distribution, set these properties in `conf/bootstrap.conf` with
+your own target ID and a C2 endpoint already reachable from the device. Use TLS outside
+an isolated development network.
+
+```properties
+c2.enable=true
+c2.agent.identifier=lab-edge-03
+c2.agent.class=lab
+c2.full.heartbeat=true
+c2.request.compression=none
+c2.rest.path.base=https://oem.example.org/c2-protocol
+c2.rest.path.heartbeat=/heartbeat
+c2.rest.path.acknowledge=/acknowledge
+```
+
+Add `lab-edge-03` to the server's allowed IDs. The agent opens all connections, including
+the download of the compiled `flow.json.raw` contents.
 
 ## Troubleshooting
 
@@ -178,6 +205,7 @@ ingress. [C2 API](docs/API.md#minifi-java-2120-c2) · [Security](docs/SECURITY.m
 | Build cannot verify a corporate proxy certificate | Set `$env:OEM_BUILD_CA_FILE = 'C:\\path\\to\\trusted-ca-bundle.pem'` to a PEM bundle with your trusted corporate CA and standard roots. Run `docker compose -f docker-compose.yml -f compose.build-ca.yml --profile agent up --build -d --wait`. Configure Docker Desktop's registry trust separately if the error occurs while pulling an image. |
 | API health fails | Run `docker compose logs postgres api`. The API uses the same `POSTGRES_*` values as PostgreSQL. A previously initialized volume retains its original roles and passwords. Restore the matching settings or rotate the database credentials in PostgreSQL. |
 | Agent is missing or has no ACK | Run `docker compose --profile agent logs --tail 100 minifi-agent-01 api`. Check the `agent` profile and `http://api:8000/c2-protocol/` URLs. Set `MINIFI_PROBE_AGENT_ID=oem-test-agent-01` before starting the API to enable one read-only manifest request. Use a fresh Compose project for another full smoke run. |
+| Agent is listed but disabled in Flow Manager | Check its reason. Set the explicit allowed ID, verify it reports Java 2.12.0, and wait for its full C2 manifest. After changing target settings, recreate the API container. |
 | Upgrading from MinIO/Silo | Compose now provisions the S3 bucket in the new `s3data` volume. The old `miniodata` volume remains on disk. Copy any existing objects through an S3 client using their original service before retiring that volume. |
 
 ## Scope

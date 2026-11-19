@@ -5,7 +5,7 @@ Management routes use `/api/v1` except for readiness at `/health`.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` (root) | API and database readiness |
-| GET | `/agents` | List agents by class or ID/hostname search with heartbeat freshness |
+| GET | `/agents` | List agents by class or ID/hostname search with heartbeat freshness and deployment readiness |
 | GET | `/agent-classes` | List observed classes and recent check-in counts |
 | GET | `/catalog` | Bundled processor descriptors and legacy unbundled entries |
 | GET | `/flow-editor` | Queue settings, controller service descriptors and runtime version |
@@ -57,12 +57,20 @@ receive one persistent operation with `identifier`, `operation: "DESCRIBE"`, and
 Unsupported graphs and properties return 422 and leave the draft intact.
 
 `POST /api/v1/deployments` with `flow_id` and `agent_id` queues a published artifact for
-an agent explicitly enabled by `MINIFI_FLOW_AGENT_IDS` or `MINIFI_FLOW_AGENT_ID`.
+an allowed agent. Compose allows its two test IDs when there are no explicit targets.
+`MINIFI_FLOW_AGENT_IDS` and `MINIFI_FLOW_AGENT_ID` override those defaults when set.
 A disallowed target or execution policy returns 403. An incompatible runtime or missing
 manifest component, unpublished artifact, or overlapping active deployment returns 409.
 The first complete heartbeat supplies the processor and controller service coordinates
 required for compatibility checks. A class-only request keeps the
 legacy metadata-only behavior.
+
+The unfiltered inventory includes `can_deploy_flow` and a nullable `deployment_blocker`
+with values `NOT_ENABLED`, `INCOMPATIBLE_RUNTIME` or `AWAITING_MANIFEST`.
+`?deployable=true` lists generally ready targets. The deployment request also checks
+the selected artifact against the agent's component coordinates and the execution policy.
+For **Publish and deploy**, the UI publishes the saved revision through the existing
+endpoint before queueing it. If queueing fails, that published revision can be retried.
 
 A deployment moves from `PENDING` to `DISPATCHED` when offered in a heartbeat response.
 A successful agent ACK (`FULLY_APPLIED` or `NO_OPERATION`) sets `ACKNOWLEDGED`.

@@ -12,12 +12,16 @@ class Settings(BaseSettings):
     minifi_probe_agent_id: str = ""
     minifi_flow_agent_id: str = ""
     minifi_flow_agent_ids: str = ""
+    minifi_enable_compose_test_targets: bool = False
     minifi_allow_execution_processors: bool = False
 
     @property
     def flow_agent_ids(self) -> frozenset[str]:
         ids = {agent.strip() for agent in self.minifi_flow_agent_ids.split(",")}
-        return frozenset((ids | {self.minifi_flow_agent_id}) - {""})
+        explicit = frozenset((ids | {self.minifi_flow_agent_id.strip()}) - {""})
+        if explicit or not self.minifi_enable_compose_test_targets:
+            return explicit
+        return frozenset({"oem-test-agent-01", "oem-test-agent-02"})
 
     def database_connection(self) -> str | URL:
         if self.database_url:

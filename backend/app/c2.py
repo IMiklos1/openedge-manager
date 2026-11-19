@@ -13,7 +13,10 @@ from .catalog import MINIFI_VERSION
 from .config import settings
 from .db import get_db
 from .models import Agent, C2Probe, Deployment
-from .delivery import UpdateConfiguration, acknowledge_flow_update, artifact_components, artifact_for, flow_update, permits_execution
+from .delivery import (
+    MANIFEST_COMPONENTS, UpdateConfiguration, acknowledge_flow_update,
+    artifact_components, artifact_for, flow_update, permits_execution,
+)
 
 router = APIRouter(prefix="/c2-protocol", tags=["MiNiFi C2"])
 MAX_BODY_BYTES = 4 * 1024 * 1024
@@ -158,7 +161,7 @@ def heartbeat(
             coordinates = [bundle.group, bundle.artifact, bundle.version]
             for entry in (bundle.componentManifest.processors or []) + (bundle.componentManifest.controllerServices or []):
                 extensions.append([entry.type, *coordinates])
-        values["capabilities"] = {"minifi_components": sorted(extensions)}
+        values["capabilities"] = {MANIFEST_COMPONENTS: sorted(extensions)}
     seen_at = datetime.now(timezone.utc)
     values.update(runtime="minifi-java", status="ONLINE", last_seen=seen_at)
     insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert

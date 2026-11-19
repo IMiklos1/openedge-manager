@@ -64,6 +64,12 @@ const navItems = [
   { id: 'deployments', title: 'Deployments', icon: Boxes },
 ] as const
 
+const targetBlockers: Record<NonNullable<Agent['deployment_blocker']>, string> = {
+  NOT_ENABLED: 'deployments disabled',
+  INCOMPATIBLE_RUNTIME: 'unsupported runtime',
+  AWAITING_MANIFEST: 'waiting for full C2 manifest',
+}
+
 export default function App() {
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphNode>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<GraphEdge>([])
@@ -85,7 +91,7 @@ export default function App() {
   const [history, setHistory] = useState<Revision[]>([])
   const [catalogQuery, setCatalogQuery] = useState('')
   const [canvasKey, setCanvasKey] = useState(0)
-  const [agents, setAgents] = useState<Agent[]>([])
+  const [agents, setAgents] = useState<Agent[]>()
   const [agentId, setAgentId] = useState('')
   const [deployments, setDeployments] = useState<Record<string, Deployment>>({})
   const [agentError, setAgentError] = useState(false)
@@ -100,8 +106,10 @@ export default function App() {
   const dirty = saved ? saved.snapshot !== snapshot : nodes.length > 0 || !!metadata.controller_services?.length || metadata.name !== emptyFlow.name || !!metadata.description
   const savedCurrent = saved && !dirty
   const deployment = deployments[agentId]
+  const revisionDeployment = deployment && savedCurrent && deployment.flow_id === saved.draft.id
+    && deployment.version === saved.draft.version ? deployment : undefined
   const activeDeployment = deployment && !['APPLIED', 'FAILED'].includes(deployment.status)
-  const eligibleAgents = agents.filter(agent => agent.can_deploy_flow)
+  const selectedAgent = agents?.find(agent => agent.id === agentId)
   const node = selection?.kind === 'node' ? nodes.find(item => item.id === selection.id) : undefined
   const edge = selection?.kind === 'edge' ? edges.find(item => item.id === selection.id) : undefined
   const service = selection?.kind === 'service' ? metadata.controller_services?.find(item => item.id === selection.id) : undefined
@@ -110,6 +118,9 @@ export default function App() {
   }))
   const errors = savedCurrent ? saved.draft.validation_errors : []
   const title = navItems.find(item => item.id === tab)?.title
+  const canUseRevision = savedCurrent && (saved.digest || (!readOnly && errors.length === 0))
+  const canDeploy = !busy && !!canUseRevision && selectedAgent?.can_deploy_flow && !activeDeployment
+  const deployLabel = savedCurrent && !saved.digest && !readOnly ? 'Publish and deploy' : 'Deploy flow'
 
   function relationshipsOf(id: string) {
     const source = nodes.find(item => item.id === id)?.data.processor
@@ -136,7 +147,7 @@ export default function App() {
       .then(([options, editor]) => {
         if (current) { setCatalog(options); setEditor(editor) }
       }).catch(error => { if (current) setCatalogError(error.message) })
-    const refresh = () => apiRequest<Agent[]>('/agents?deployable=true').then(rows => {
+    const refresh = () => apiRequest<Agent[]>('/agents').then(rows => {
       if (current) { setAgents(rows); setAgentError(false) }
     }).catch(() => { if (current) setAgentError(true) })
     void refresh()
@@ -263,18 +274,25 @@ export default function App() {
     await loadFlows(flowOffset)
   })
 
+  const publishRevision = async (revision: NonNullable<typeof saved>) => {
+    const { id, version } = revision.draft
+    const path = `/flows/${encodeURIComponent(id)}`
+    const artifact = await apiRequest<PublishedFlow>(`${path}/publish?version=${version}`, {})
+    setSaved({ ...revision, digest: artifact.sha256 })
+    setHistory(rows => rows.map(item => item.version === version ? { ...item, sha256: artifact.sha256 } : item))
+    setFlows(rows => rows?.map(flow => flow.id === id && flow.version === version ? { ...flow, status: 'PUBLISHED' } : flow))
+    return artifact
+  }
+
   const publishFlow = () => run(async () => {
-    if (!savedCurrent || !saved) return
-    const path = `/flows/${encodeURIComponent(saved.draft.id)}`
-    const artifact = await apiRequest<PublishedFlow>(`${path}/publish?version=${saved.draft.version}`, {})
-    setSaved({ ...saved, digest: artifact.sha256 })
+    if (!savedCurrent || readOnly) return
+    const artifact = await publishRevision(saved)
     setStatus(`Published v${artifact.version} for MiNiFi Java ${artifact.runtime_version}.`)
-    setHistory(await apiRequest<Revision[]>(`${path}/versions`))
-    await loadFlows(flowOffset)
   })
 
   const deployFlow = () => run(async () => {
-    if (!savedCurrent || !saved.digest || !agentId) return
+    if (!canDeploy || !saved) return
+    if (!saved.digest) await publishRevision(saved)
     const queued = await apiRequest<Deployment>('/deployments', {
       flow_id: saved.draft.id, version: saved.draft.version, agent_id: agentId,
     })
@@ -319,17 +337,23 @@ export default function App() {
               onChange={event => setMetadata({ ...metadata, name: event.target.value })}/></label>
             <button onClick={saveDraft} disabled={readOnly || busy || !metadata.name.trim() || !dirty}>Save draft</button>
             <button onClick={publishFlow} disabled={readOnly || busy || !savedCurrent || !!saved?.digest || errors.length > 0}>Publish flow</button>
-            <label className="input-field">Target agent<select aria-label="Target agent" value={agentId} onChange={event => setAgentId(event.target.value)}>
-              <option value="">{agentError ? 'Agent lookup failed' : eligibleAgents.length ? 'Select an agent' : 'No eligible agent'}</option>
-              {eligibleAgents.map(agent => <option key={agent.id} value={agent.id}>{agent.id}{agent.health === 'STALE' ? ' (stale)' : ''}</option>)}
+            <label className="input-field">Target agent<select aria-label="Target agent" value={agentId} disabled={busy}
+              onChange={event => setAgentId(event.target.value)}>
+              <option value="">{agentError ? 'Agent lookup failed' : !agents ? 'Loading agents…'
+                : !agents.length ? 'No agents have checked in'
+                  : agents.some(agent => agent.can_deploy_flow) ? 'Select an agent' : 'No deployment-ready agents'}</option>
+              {agents?.map(agent => <option key={agent.id} value={agent.id} disabled={!agent.can_deploy_flow}>
+                {agent.id}{agent.deployment_blocker ? ` (${targetBlockers[agent.deployment_blocker]})`
+                  : agent.health === 'STALE' ? ' (stale)' : ''}
+              </option>)}
             </select></label>
-            <button className="primary" onClick={deployFlow}
-              disabled={busy || !savedCurrent || !saved?.digest || !eligibleAgents.some(agent => agent.id === agentId) || !!activeDeployment}>Deploy flow</button>
+            <button className="primary" onClick={deployFlow} disabled={!canDeploy}>{deployLabel}</button>
           </div>
           <div className="editor-message" role="status">
-            <span>{status || (readOnly ? 'Saved version · read only' : dirty ? 'Unsaved changes' : saved?.digest ? 'Published' : '')}</span>
-            {deployment && <span className={`badge ${deployment.status.toLowerCase()}`}>
-              Deployment {deployment.status}{deployment.ack_state ? ` (${deployment.ack_state})` : ''}
+            <span>{status || (readOnly ? 'Saved version · read only' : dirty ? 'Save the draft before deploying changes.'
+              : saved?.digest ? 'Published' : '')}</span>
+            {revisionDeployment && <span className={`badge ${revisionDeployment.status.toLowerCase()}`}>
+              Deployment {revisionDeployment.status}{revisionDeployment.ack_state ? ` (${revisionDeployment.ack_state})` : ''}
             </span>}
           </div>
           <div className="editor-grid">

@@ -44,6 +44,12 @@ published artifact and any compatible enabled agent explicitly. The editor store
 controller services alongside the graph. Fleet rollout policy and parameter contexts
 remain future work.
 
+The target picker shows the inventory and the reason when a device is ineligible.
+Compose supplies the built-in test targets if the operator has not configured an explicit
+allowlist. The UI publishes the current saved revision before queueing when the operator
+chooses **Publish and deploy**. The same publication and deployment endpoints are used
+for both that action and the separate publish-then-deploy workflow.
+
 ## Processor capability catalogue
 The generated catalog takes component classes, bundle coordinates, properties, input rules
 and relationships from the stock image's NAR manifests. OEM verifies declared components

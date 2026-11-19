@@ -108,6 +108,22 @@ still need verification. Protected secrets and authenticated agent management re
 Next, qualify secure remote targeting and add real-device test flows for the MQTT, TCP,
 and database service families. [Catalog scope](PROCESSOR_CATALOG.md)
 
+## Flow Manager deployment targets
+
+The default Compose startup enables the bundled targets. The picker displays all
+registered agents with readiness or a reason for exclusion. An explicit allowlist
+replaces the development defaults and can include devices with their own identifiers.
+The saved revision can be published and queued in one action. The agent downloads
+the raw flow over outbound C2 and application remains confirmed by its heartbeat.
+
+Verified on Linux amd64 with 19 Compose smoke tests and Chromium. With default settings,
+two real MiNiFi Java 2.12.0 agents applied different saved revisions, one published by
+the combined action and one published separately. An explicitly enabled third agent with
+a custom ID applied both variants in a separate Compose project. The browser also
+verified visibility of a disabled inventory entry and reloaded previously saved settings.
+Native Windows, ARM64, physical remote devices and authenticated production enrollment
+are still open. [Reproduction commands](../README.md#verify-the-workspace-in-chromium)
+
 ## Phase 0 — Runtime spike (2–3 weeks)
 
 Expand the tested runtime/build matrix to Windows x64 and Linux ARM64. Verify processor

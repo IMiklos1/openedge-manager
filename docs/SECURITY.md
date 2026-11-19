@@ -10,8 +10,11 @@ the reported agent ID when supplied. That reported ID is unauthenticated. Java f
 supply just the operation ID. The optional probe issues only a read-only manifest request. The adapter bounds and validates C2 bodies and persists only selected
 inventory fields and the ACK state.
 
-Flow replacement is disabled by default. Set explicit target IDs using
-`MINIFI_FLOW_AGENT_IDS` or the legacy singular setting. Reported manifest components
+The API has no allowed targets by default when run outside the development Compose
+stack. Compose permits its two disposable test IDs if there are no explicit IDs.
+Set `MINIFI_ENABLE_COMPOSE_TEST_TARGETS=false` to turn off those defaults, or set
+explicit target IDs using `MINIFI_FLOW_AGENT_IDS` or the legacy singular setting.
+Inventory membership alone grants no deployment permission. Reported manifest components
 are checked for compatibility and the IDs constrain delivery in the local stack.
 These checks use claims from the agent. Production deployment requires authenticated
 enrollment, scoped artifact access, mTLS and authenticated management operations.
