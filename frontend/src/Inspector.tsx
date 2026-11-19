@@ -89,7 +89,7 @@ function ComponentProperties({ component, schema, change, disabled, services }: 
       <legend>{isGenerator ? 'Generated attributes' : 'Dynamic properties'}</legend>
       {!isGenerator && schema.dynamic?.map((item, index) => <p className="muted" key={index}>{item.description}</p>)}
       {Object.entries(attrs).map(([key, current]) => <div className="attribute-row" key={key}>
-        <label className="input-field">{key}<textarea value={current} rows={2} disabled={disabled}
+        <label className="input-field">{key}<textarea aria-label={key} value={current} rows={2} disabled={disabled}
           onChange={event => change({ config: component.config, attributes: { ...attrs, [key]: event.target.value } })}/></label>
         <button type="button" className="icon-button" aria-label={`Remove ${key}`} disabled={disabled} onClick={() => {
           const copy = { ...attrs }

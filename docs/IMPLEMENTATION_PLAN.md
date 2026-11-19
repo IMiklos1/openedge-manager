@@ -94,10 +94,12 @@ catalog's declared fields and dynamic properties, relationship routing, standalo
 scheduling and controller-service references. Existing drafts and the new fields
 share the versioned PostgreSQL JSON representation. No schema migration is needed.
 
-Verified on Linux amd64 with the pinned Java image: file content moved through
-GetFile, UpdateAttribute, RouteOnAttribute and InvokeHTTP to an HTTP receiver.
-Chromium created, saved and reopened a graph with editable processor settings,
-queues and controller services, and deployed two versions using different targets.
+All 17 Compose smoke tests passed on Linux amd64 with the pinned Java image. File
+content moved through GetFile, UpdateAttribute, RouteOnAttribute and InvokeHTTP
+to an HTTP receiver. A second flow used ConvertRecord with JsonTreeReader and
+JsonRecordSetWriter and sent the resulting JSON array to the receiver. Chromium
+created, saved and reopened a graph with editable processor settings, queues and
+controller services, and deployed two versions using different targets.
 See the [automated tests](../README.md#run-the-automated-smoke-tests) and [browser walkthrough](../README.md#verify-the-workspace-in-chromium).
 
 The catalog establishes image availability. Processor-specific runtime behavior for the
