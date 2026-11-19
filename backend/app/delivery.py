@@ -56,9 +56,9 @@ def advertised_components(agent: Agent) -> set[tuple[str, ...]]:
 def deployment_blocker(agent: Agent) -> str | None:
     if agent.id not in settings.flow_agent_ids:
         return "NOT_ENABLED"
-    if agent.runtime != "minifi-java" or agent.runtime_version != MINIFI_VERSION:
+    if agent.runtime != "minifi-java" or (agent.runtime_version and agent.runtime_version != MINIFI_VERSION):
         return "INCOMPATIBLE_RUNTIME"
-    if not advertised_components(agent):
+    if not agent.runtime_version or not advertised_components(agent):
         return "AWAITING_MANIFEST"
     return None
 

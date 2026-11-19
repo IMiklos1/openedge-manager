@@ -36,11 +36,12 @@ class DeploymentTargetsTest(unittest.TestCase):
         Base.metadata.create_all(engine)
         manifest = {MANIFEST_COMPONENTS: [["processor", "group", "bundle", MINIFI_VERSION]]}
         with Session(engine) as db, patch.object(
-            settings, "minifi_flow_agent_ids", "a-awaiting,b-ready,c-incompatible",
+            settings, "minifi_flow_agent_ids", "a-awaiting,a-no-version,b-ready,c-incompatible",
         ):
             db.add_all([
                 Agent(id="a-awaiting", runtime="minifi-java", runtime_version=MINIFI_VERSION,
                       capabilities={MANIFEST_COMPONENTS: []}),
+                Agent(id="a-no-version", runtime="minifi-java"),
                 Agent(id="b-ready", runtime="minifi-java", runtime_version=MINIFI_VERSION, capabilities=manifest),
                 Agent(id="c-incompatible", runtime="minifi-java", runtime_version="0.0"),
                 Agent(id="d-disabled", runtime="minifi-java", runtime_version=MINIFI_VERSION, capabilities=manifest),
@@ -49,6 +50,7 @@ class DeploymentTargetsTest(unittest.TestCase):
             agents = list_agents(db, offset=0, limit=None, q=None)
             self.assertEqual({item["id"]: item["deployment_blocker"] for item in agents}, {
                 "a-awaiting": "AWAITING_MANIFEST",
+                "a-no-version": "AWAITING_MANIFEST",
                 "b-ready": None,
                 "c-incompatible": "INCOMPATIBLE_RUNTIME",
                 "d-disabled": "NOT_ENABLED",
