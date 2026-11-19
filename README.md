@@ -3,6 +3,18 @@
 Self-hosted development foundation for edge fleet and flow management with an independent
 React Flow designer and outbound Apache MiNiFi Java C2.
 
+## Quick start from my VS Code
+
+```powershell
+docker compose --profile agent up -d --build
+```
+
+Check logs:
+```powershell
+docker compose --profile agent ps
+docker compose --profile agent logs -f minifi-agent-01
+```
+
 ## Start on Windows with PowerShell
 
 Start Docker Desktop with the Linux container engine and Compose v2. From the repository root:
