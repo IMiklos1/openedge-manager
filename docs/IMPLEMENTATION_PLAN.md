@@ -67,6 +67,14 @@ dynamic attributes on GenerateFlowFile, timer-driven scheduling, and bounded que
 settings. The default Compose integration has one explicitly enabled development
 target. Published revisions can be deployed again to that target.
 
+| Status | Evidence |
+| --- | --- |
+| Verified on Linux amd64 | All 13 Compose smoke tests passed. A real MiNiFi Java 2.12.0 agent downloaded and applied two different revisions, then reapplied the first. The tests checked the downloaded SHA-256, the correlated C2 acknowledgement, and the running configuration reported by the agent. |
+| Verified in Chromium | A flow built in the browser retained processor, scheduling and queue settings after reopening from the server. Both revisions reached `APPLIED` on the local agent. The browser opened the earlier revision in read-only mode and filtered deployment history. |
+| Unverified | Native Windows and Linux ARM64 agent execution, PowerShell execution, health after agent loss, and the wider processor and scheduling matrix. |
+
+The [README](../README.md#run-the-automated-smoke-tests) contains Compose and browser test commands.
+
 Broader CEM workflows including authenticated enrollment, multi-agent staged rollout,
 role-based access, class administration, remote diagnostics, lifecycle control, fleet
 events, controller services, and cross-platform runtime qualification are planned.
