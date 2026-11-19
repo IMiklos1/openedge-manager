@@ -11,7 +11,10 @@ from .schemas import AgentHeartbeat, FlowCreate, FlowEdit, DeploymentCreate
 from .catalog import MINIFI_VERSION, UNBUNDLED
 from .compiler import CompileError, compile_minifi_java_json, runtime_validation
 from .config import settings
-from .delivery import ACTIVE, artifact_components, artifact_for, missing_agent_components, permits_execution
+from .delivery import (
+    ACTIVE, MANIFEST_COMPONENTS, artifact_components, artifact_for,
+    deployment_blocker, missing_agent_components, permits_execution,
+)
 from .migrate import upgrade_schema
 from .processor_properties import PROCESSOR_SCHEMAS, QUEUE_FIELDS, SERVICE_SCHEMAS, validate_secret_fields
 from .c2 import router as minifi_c2_router
@@ -76,21 +79,25 @@ def list_agents(
         query = query.where(Agent.agent_class == agent_class)
     if deployable:
         query = query.where(Agent.id.in_(settings.flow_agent_ids),
-                            Agent.runtime == "minifi-java", Agent.runtime_version == MINIFI_VERSION)
+                            Agent.runtime == "minifi-java", Agent.runtime_version == MINIFI_VERSION,
+                            Agent.capabilities[MANIFEST_COMPONENTS][0][0].as_string().is_not(None))
     if q:
         query = query.where(Agent.id.icontains(q, autoescape=True) | Agent.hostname.icontains(q, autoescape=True))
     rows = db.scalars(query).all()
     recent = datetime.now(timezone.utc) - timedelta(seconds=30)
-    return [{
-        "id": a.id, "hostname": a.hostname, "os_name": a.os_name,
-        "architecture": a.architecture, "runtime": a.runtime,
-        "runtime_version": a.runtime_version, "agent_class": a.agent_class,
-        "status": a.status, "reported_flow_version": a.reported_flow_version,
-        "can_deploy_flow": a.id in settings.flow_agent_ids and a.runtime == "minifi-java"
-        and a.runtime_version == MINIFI_VERSION,
-        "last_seen": a.last_seen.isoformat() if a.last_seen else None,
-        "health": agent_health(a.last_seen, recent),
-    } for a in rows]
+    agents = []
+    for agent in rows:
+        blocker = deployment_blocker(agent)
+        agents.append({
+            "id": agent.id, "hostname": agent.hostname, "os_name": agent.os_name,
+            "architecture": agent.architecture, "runtime": agent.runtime,
+            "runtime_version": agent.runtime_version, "agent_class": agent.agent_class,
+            "status": agent.status, "reported_flow_version": agent.reported_flow_version,
+            "can_deploy_flow": blocker is None, "deployment_blocker": blocker,
+            "last_seen": agent.last_seen.isoformat() if agent.last_seen else None,
+            "health": agent_health(agent.last_seen, recent),
+        })
+    return agents
 
 @app.get("/api/v1/agent-classes")
 def list_agent_classes(
@@ -290,8 +297,11 @@ def create_deployment(payload: DeploymentCreate, db: Session = Depends(get_db)):
     agent = db.get(Agent, payload.agent_id)
     if agent is None:
         raise HTTPException(404, "Agent has not checked in")
-    if agent.runtime != "minifi-java" or agent.runtime_version != MINIFI_VERSION:
+    blocker = deployment_blocker(agent)
+    if blocker == "INCOMPATIBLE_RUNTIME":
         raise HTTPException(409, f"Agent must report MiNiFi Java {MINIFI_VERSION}")
+    if blocker == "AWAITING_MANIFEST":
+        raise HTTPException(409, "Agent must send a full C2 manifest before deployment")
     artifact = artifact_for(db, deployment)
     if artifact is None:
         raise HTTPException(409, "Publish a compiled flow artifact before deployment")

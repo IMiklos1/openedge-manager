@@ -6,12 +6,14 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .catalog import MINIFI_VERSION
 from .config import settings
 from .models import Agent, Deployment, FlowArtifact
 
 ACTIVE = ("PENDING", "DISPATCHED", "ACKNOWLEDGED")
 DELIVERABLE = ("PENDING", "DISPATCHED")
 SUCCESS_ACK = ("FULLY_APPLIED", "NO_OPERATION")
+MANIFEST_COMPONENTS = "minifi_components"
 EXECUTION_TYPES = {
     "org.apache.nifi.processors.standard.ExecuteProcess",
     "org.apache.nifi.processors.standard.ExecuteStreamCommand",
@@ -43,10 +45,26 @@ def permits_execution(components: list[dict]) -> bool:
     return settings.minifi_allow_execution_processors or all(item["type"] not in EXECUTION_TYPES for item in components)
 
 
+def advertised_components(agent: Agent) -> set[tuple[str, ...]]:
+    manifest = agent.capabilities.get(MANIFEST_COMPONENTS)
+    if not isinstance(manifest, list):
+        return set()
+    return {tuple(entry) for entry in manifest if isinstance(entry, list) and len(entry) == 4
+            and all(isinstance(value, str) and value for value in entry)}
+
+
+def deployment_blocker(agent: Agent) -> str | None:
+    if agent.id not in settings.flow_agent_ids:
+        return "NOT_ENABLED"
+    if agent.runtime != "minifi-java" or agent.runtime_version != MINIFI_VERSION:
+        return "INCOMPATIBLE_RUNTIME"
+    if not advertised_components(agent):
+        return "AWAITING_MANIFEST"
+    return None
+
+
 def missing_agent_components(agent: Agent, components: list[dict]) -> list[str]:
-    manifest = agent.capabilities.get("minifi_components") or []
-    advertised = {tuple(entry) for entry in manifest if isinstance(entry, list) and len(entry) == 4
-                  and all(isinstance(value, str) for value in entry)}
+    advertised = advertised_components(agent)
     return sorted({
         component["type"]
         for component in components
