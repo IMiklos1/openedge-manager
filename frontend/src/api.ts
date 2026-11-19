@@ -121,6 +121,7 @@ export interface Agent {
   health: 'RECENT' | 'STALE' | 'UNKNOWN'
   last_seen: string | null
   can_deploy_flow: boolean
+  deployment_blocker: 'NOT_ENABLED' | 'INCOMPATIBLE_RUNTIME' | 'AWAITING_MANIFEST' | null
 }
 
 export interface Draft {

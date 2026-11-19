@@ -15,10 +15,10 @@ try {
   const input = name => page.getByLabel(name, { exact: true })
   const status = text => page.getByRole('status').filter({ hasText: text }).waitFor({ timeout: 60_000 })
   const processor = name => input(`Configure ${name}`)
-  const deploy = async () => {
+  const deploy = async (action = 'Deploy flow') => {
     const created = page.waitForResponse(response => response.url().endsWith('/api/v1/deployments')
       && response.request().method() === 'POST')
-    await button('Deploy flow').click()
+    await button(action).click()
     const response = await created
     assert.equal(response.status(), 200)
     const item = await response.json()
@@ -69,10 +69,19 @@ try {
   assert.equal(await input('Back pressure objects').inputValue(), '25')
   assert.equal(await input('Connection name').inputValue(), 'Browser queue')
 
-  await button('Publish flow').click()
-  await status('Published v1')
+  // Inventory membership on its own must not enable deployment.
+  const inventoryId = `browser-inventory-${randomUUID().slice(0, 8)}`
+  const inventory = await page.request.post(`/api/v1/agents/${inventoryId}/heartbeat`, {
+    data: { runtime: 'minifi-java', runtime_version: '2.12.0' },
+  })
+  assert.equal(inventory.ok(), true)
+  const disabledTarget = input('Target agent').locator(`option[value="${inventoryId}"]`)
+  await disabledTarget.waitFor({ state: 'attached' })
+  assert.equal(await disabledTarget.evaluate(option => option.disabled), true)
+  assert.match(await disabledTarget.textContent(), /deployments disabled/)
   await input('Target agent').selectOption(agentId)
-  const first = await deploy()
+  const first = await deploy('Publish and deploy')
+  assert.equal(first.version, 1)
 
   await processor('Browser generator').click()
   await input('Custom Text').fill('{"source":"Browser sample B"}')
@@ -128,7 +137,7 @@ try {
   await page.getByRole('row').filter({ hasText: flowName }).filter({ hasText: 'Version 1' }).waitFor()
   await input('Agent ID').fill(secondAgent)
   await page.getByRole('row').filter({ hasText: flowName }).filter({ hasText: 'Version 2' }).waitFor()
-  console.log(`Browser passed: persisted processor, queue and controller services, reopened v1, and applied both revisions (targets: ${agentId}, ${secondAgent}).`)
+  console.log(`Browser passed: showed an ineligible inventory agent, published and deployed v1, persisted controller services, and applied v2 (targets: ${agentId}, ${secondAgent}).`)
 } finally {
   await browser.close()
 }
