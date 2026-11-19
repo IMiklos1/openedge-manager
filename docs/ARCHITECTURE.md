@@ -27,8 +27,9 @@ image references include multi-architecture manifest digests.
 ## Canonical flow model
 OEM Flow DSL is the source of truth. A versioned compiler translates approved nodes to the
 pinned runtime configuration schema. Compiler outputs are immutable artifacts with SHA-256,
-runtime version and flow version metadata. The compiler targets GenerateFlowFile and LogAttribute with a server-defined configuration
-catalog. It maps validated properties, position, scheduling, and queue settings into the
+runtime version and flow version metadata. The compiler uses the stock image's processor
+and controller service manifests. It maps properties, service references, relationships,
+position, scheduling and queue settings into the
 Java 2.12.0 raw-flow JSON model. PostgreSQL stores an immutable graph revision on each save
 and a separate immutable artifact on publication. The current flow row uses compare-and-swap
 versioning to prevent an editor from overwriting another editor's changes.
@@ -39,27 +40,16 @@ The workspace loads existing graphs and immutable revisions, edits processors an
 using the server's schema, and surfaces compile errors with node or connection context.
 The fleet views use the persisted agent and deployment APIs for last-seen freshness,
 reported classes, deployment attempts, and ACK state. Operators can choose an older
-published artifact explicitly. Fleet rollout policy, controller services, parameter
-contexts, and a full runtime processor catalog remain future work.
+published artifact and any compatible enabled agent explicitly. The editor stores
+controller services alongside the graph. Fleet rollout policy and parameter contexts
+remain future work.
 
 ## Processor capability catalogue
-Each entry records OEM type, exact runtime build, OS/architecture availability, property schema,
-relationships, extension dependencies, licence metadata and integration-test status.
-A processor must not be considered deployable just because a similarly named NiFi processor exists.
-
-| Protocol | Initial implementation direction | Qualification |
-|---|---|---|
-| Files | MiNiFi Java file processors | Verify exact build |
-| HTTP/REST | MiNiFi Java HTTP processors | Verify TLS/proxy behavior |
-| MQTT | MiNiFi Java MQTT processors | Verify broker/auth/QoS |
-| TCP/UDP | MiNiFi Java socket processors | Verify processor availability |
-| Kafka | Runtime processor or extension | Build/integration test |
-| SQL | Runtime DB processors and drivers | Driver/licence matrix |
-| Modbus TCP | Custom Java extension or local gateway | Not assumed built-in |
-| OPC UA | Custom extension or local gateway | Not assumed built-in |
-
-Start MVP with files, HTTP, MQTT and TCP. Add Kafka/SQL after compatibility tests.
-Treat Modbus/OPC UA as dedicated extension work until proven otherwise.
+The generated catalog takes component classes, bundle coordinates, properties, input rules
+and relationships from the stock image's NAR manifests. OEM verifies declared components
+against the exact runtime heartbeat before queueing or dispatching a deployment. The
+catalog lists 117 processors and 47 controller services. Device-side validators still
+govern valid values and external resources. [Catalog provenance and coverage](PROCESSOR_CATALOG.md)
 
 ## Outbound-only deployment
 
@@ -74,7 +64,8 @@ The backend tracks the artifact digest and per-deployment status.
 The adapter handles uncompressed JSON from the MiNiFi Java 2.12.0 HTTP C2 client.
 `POST /c2-protocol/heartbeat` upserts agent identity and reported metadata in PostgreSQL,
 then returns a `requestedOperations` array. The Compose agent includes its runtime manifest
-in each heartbeat. Heartbeats that omit it preserve the recorded version.
+in each heartbeat. The API persists only component identities from the manifest.
+Heartbeats that omit the manifest preserve the recorded version and component list.
 
 To verify the return path, set `MINIFI_PROBE_AGENT_ID` to the test agent identifier. The API
 offers a read-only `DESCRIBE MANIFEST` operation with a persistent ID, then records the state
@@ -105,5 +96,5 @@ only queue/cache. Use jittered heartbeat intervals and exponential backoff. Batc
 Test 1000 agents, reconnect storms, large artifacts and database failover.
 
 ## Non-goals for v1
-No arbitrary remote shell execution, no inbound edge access, no universal NiFi processor support,
-and no exactly-once guarantee across arbitrary external systems.
+Inbound edge control, a generic remote shell, unbundled NiFi extensions, and
+exactly-once guarantees across external systems are outside the current scope.

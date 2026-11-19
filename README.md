@@ -50,8 +50,10 @@ docker compose --profile agent up --build -d --wait
 ```
 
 Open **Flow Manager** at `http://127.0.0.1:5173`. Select **Load test flow**. Click a
-processor to edit its properties, scheduling, comments and success relationship. Select a
-connection to configure its name, relationship and queue. Save the draft, then publish it. Select `oem-test-agent-01` and click **Deploy flow**.
+processor to edit its properties, scheduling, comments and relationships. Select a
+connection to configure its name, relationship and queue. Create and configure controller
+services from the designer's selector when a component needs one. Save the draft, then
+publish it. Select `oem-test-agent-01` under **Target agent** and click **Deploy flow**.
 `ACKNOWLEDGED` records the agent's C2 result. `APPLIED` appears after a later heartbeat
 reports the published digest as the running flow. The test flow generates a one-byte FlowFile
 and sends it to LogAttribute.
@@ -118,7 +120,10 @@ The `smoke` profile starts `oem-smoke-agent-01` from the same pinned Java image 
 compares the observed heartbeat with the API and PostgreSQL, then matches the command ID in the
 heartbeat response to the Java ACK and persisted outcome. It also checks UI/API readiness, Redis,
 and signed S3 object I/O. The suite also publishes a flow, verifies the downloaded bytes against
-the SHA-256 digest, and waits for the real agent to report that LogAttribute received FlowFiles.
+the SHA-256 digest, and waits for the real agent to report that LogAttribute received FlowFiles. The catalog
+check compares every component with the real C2 manifest. The file integration test checks
+that GetFile, UpdateAttribute, RouteOnAttribute and InvokeHTTP deliver matching bytes
+and a dynamic header to the local HTTP receiver.
 A successful run prints `MiNiFi applied <digest> and LogAttribute received a FlowFile`.
 
 For smoke-test diagnostics before cleanup, run
@@ -127,17 +132,42 @@ Test results and platform coverage are in the [implementation plan](docs/IMPLEME
 
 ## Verify the workspace in Chromium
 
-Start a fresh local `agent` profile with `MINIFI_FLOW_AGENT_ID=oem-test-agent-01` and an
-installed Chromium browser. The script saves and reopens a configured graph, deploys two
-distinct revisions to the real agent, and checks the deployment history.
+Use disposable agents. The browser test creates draft revisions, configures and references
+JSON controller services, reads the saved graph, and deploys the two revisions to selected
+agents. The fleet profile adds a second independent agent for this test.
 
-```bash
+```powershell
+$env:MINIFI_FLOW_AGENT_IDS = "oem-test-agent-01,oem-test-agent-02"
+docker compose --profile agent --profile fleet up --build -d --wait
+$env:OEM_BROWSER_SECOND_AGENT = "oem-test-agent-02"
+$env:OEM_CHROMIUM = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+$env:OEM_BROWSER_URL = "http://127.0.0.1:5173"
 npm --prefix frontend ci
-OEM_CHROMIUM=/usr/bin/chromium OEM_BROWSER_URL=http://127.0.0.1:5173 npm --prefix frontend run test:browser
+npm --prefix frontend run test:browser
+docker compose --profile agent --profile fleet down
 ```
 
-In PowerShell, set `$env:OEM_CHROMIUM` to the full browser executable path and
-`$env:OEM_BROWSER_URL` to the UI origin, then run the same npm commands.
+On Linux with Chromium installed:
+
+```bash
+MINIFI_FLOW_AGENT_IDS=oem-test-agent-01,oem-test-agent-02 docker compose --profile agent --profile fleet up --build -d --wait
+npm --prefix frontend ci
+OEM_BROWSER_SECOND_AGENT=oem-test-agent-02 OEM_CHROMIUM=/usr/bin/chromium npm --prefix frontend run test:browser
+docker compose --profile agent --profile fleet down
+```
+
+To send both revisions to one local target, omit `OEM_BROWSER_SECOND_AGENT` and the
+`fleet` profile. The browser test defaults to `oem-test-agent-01` and the UI on port 5173.
+
+### Targeting a connected agent
+
+Set `MINIFI_FLOW_AGENT_IDS` to a comma-separated list of the unique identifiers that
+may receive flow updates. The singular `MINIFI_FLOW_AGENT_ID` remains supported.
+For a Java agent on a separate machine to appear as a deployment target, configure its
+outbound C2 base URL and identifier, enable its full heartbeat, and use a trusted
+network and the same pinned runtime components. Compose binds its control plane to
+loopback for development. Production access needs authenticated management and agent
+ingress. [C2 API](docs/API.md#minifi-java-2120-c2) · [Security](docs/SECURITY.md)
 
 ## Troubleshooting
 
@@ -152,13 +182,11 @@ In PowerShell, set `$env:OEM_CHROMIUM` to the full browser executable path and
 
 ## Scope
 
-The local stack stores agent inventory in PostgreSQL. Redis and SeaweedFS are provisioned
-and tested for future queue and storage integration. The compiler targets GenerateFlowFile and LogAttribute on MiNiFi Java 2.12.0. The inspector
-includes their standard property fields, timer-driven scheduling, literal generated attributes
-and bounded queue settings. The profile restricts expressions, regex syntax, processor types
-and graph topology. Compiled artifacts are immutable PostgreSQL records.
-C2 delivers an artifact to one explicitly enabled agent. Production identity, RBAC, mTLS,
-additional processors, and fleet rollout are planned.
+The designer exposes the 117 processors and 47 controller services shipped with the
+pinned MiNiFi Java 2.12.0 image. Draft revisions and compiled artifacts persist in PostgreSQL.
+External resources, sensitive values, custom extensions, runtime verification across all
+processors and production fleet features have separate coverage and limitations.
+[Catalog and runtime scope](docs/PROCESSOR_CATALOG.md)
 
 Only the UI and API are published to host loopback. The stack uses local plaintext HTTP and
 development-only credential defaults. See [architecture](docs/ARCHITECTURE.md) and

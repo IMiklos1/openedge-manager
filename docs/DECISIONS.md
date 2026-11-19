@@ -61,3 +61,18 @@ Upstream sources are the [Apache release listing](https://nifi.apache.org/downlo
 [Java C2 source](https://github.com/apache/nifi/tree/19f4df8e048e91d87d3e4967c69b1298f9dbe450/c2),
 [C++ 1.1.0 build and extension guide](https://github.com/apache/nifi-minifi-cpp/blob/1a4b84eb8b53eebcf7c92d83f6ae818f440e33ee/README.md),
 and [C++ C2 source](https://github.com/apache/nifi-minifi-cpp/tree/1a4b84eb8b53eebcf7c92d83f6ae818f440e33ee/libminifi/src/c2/protocols).
+
+## ADR-008 — Build the catalog from the pinned Java image
+
+Accepted. Use the NAR extension manifests in the same digest-pinned Docker image
+as the development agents. Keep the generated metadata in source so the API, tests and
+designer use a fixed catalog without fetching processor schemas at runtime. Regenerate
+from the image when its digest changes. Match published component types and bundle
+coordinates with each target's C2 manifest. This checks presence while preserving the
+agent's own responsibility for validating property values and external resources.
+
+The deployment UI operates on individual agents in the server's existing development
+trust boundary. Multiple opt-in IDs replace the single-target restriction. C2 remains
+outbound from the agent. Sensitive values and production enrollment require their own
+integration. [Catalog provenance](PROCESSOR_CATALOG.md) ·
+[Apache MiNiFi System Admin Guide](https://github.com/apache/nifi/blob/main/minifi/minifi-docs/src/main/markdown/System_Admin_Guide.md#config-file)

@@ -2,21 +2,72 @@ export type Value = string | number | boolean
 export type Values = Record<string, Value>
 
 export interface Field {
-  type: 'integer' | 'size' | 'duration' | 'choice' | 'boolean' | 'text' | 'attribute_regex'
+  type: 'integer' | 'size' | 'duration' | 'choice' | 'boolean' | 'text' | 'attribute_regex' | 'service'
   label?: string
   default?: Value
   min?: number
   max?: number
   choices?: string[]
   multiline?: boolean
+  description?: string
+  required?: boolean
+  sensitive?: boolean
+  expression_scope?: string
+  service?: string
+  choice_labels?: Record<string, string>
+  dependencies?: Record<string, string[]>
+  modifies_classpath?: boolean
 }
 
-export interface ProcessorSchema {
+export interface ComponentSchema {
   description: string
+  type: string
+  bundle: { group: string; artifact: string; version: string }
+  tags: string[]
   dynamic_properties: boolean
+  dynamic?: { name: string; description: string; value: string; expressionLanguageScope: string }[]
   properties: Record<string, Field>
+}
+
+export interface ProcessorSchema extends ComponentSchema {
+  inputRequirement?: 'INPUT_REQUIRED' | 'INPUT_ALLOWED' | 'INPUT_FORBIDDEN'
+  relationships: Record<string, { description?: string }>
+  dynamicRelationship?: { name: string; description: string }
   scheduling: Record<string, Field>
 }
+
+export interface ServiceSchema extends ComponentSchema {
+  apis: { className: string }[]
+}
+
+export interface FlowEditor {
+  queue: Record<string, Field>
+  controller_services: Record<string, ServiceSchema>
+}
+
+export interface ControllerService {
+  id: string
+  type: string
+  label?: string | null
+  description?: string | null
+  state?: 'ENABLED' | 'DISABLED'
+  config: Values
+  attributes?: Record<string, string>
+}
+
+export function sourceRelationships(node: Processor, schema: ProcessorSchema | undefined) {
+  if (!schema) return []
+  const fixed = Object.keys(schema.relationships)
+  if (node.type === 'DistributeLoad') {
+    const value = String(node.config['Number of Relationships'] ?? schema.properties['Number of Relationships'].default)
+    if (/^[0-9]{1,3}$/.test(value)) return Array.from({ length: Number(value) }, (_, index) => String(index + 1))
+  }
+  const strategy = node.config['Routing Strategy']
+  if (node.type === 'RouteOnAttribute' && strategy && strategy !== 'Route to Property name') return [...fixed, 'matched']
+  if (node.type === 'RouteText' && strategy && strategy !== 'Route to each matching Property Name') return [...fixed, 'matched']
+  return schema.dynamicRelationship ? [...new Set([...fixed, ...Object.keys(node.attributes ?? {})])] : fixed
+}
+
 
 export type Catalog = Record<string, {
   category: string
@@ -34,6 +85,8 @@ export interface Processor {
   scheduling?: Values
   attributes?: Record<string, string>
   auto_terminate_success?: boolean | null
+  auto_terminate?: string[] | null
+  retry_relationships?: string[]
 }
 
 export interface FlowConnection {
@@ -53,6 +106,7 @@ export interface Definition {
   target_class?: string
   nodes: Processor[]
   connections: FlowConnection[]
+  controller_services?: ControllerService[]
   parameters?: Record<string, unknown>
 }
 

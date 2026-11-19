@@ -85,11 +85,32 @@ the supported runtime contract.
 [Cloudera Agent Manager](https://docs.cloudera.com/cem/latest/using-cem/topics/cem-managing-agents.html) ·
 [Apache MiNiFi System Admin Guide](https://github.com/apache/nifi/blob/main/minifi/minifi-docs/src/main/markdown/System_Admin_Guide.md#config-file)
 
+## Bundled MiNiFi Java catalog and direct deployment
+
+The exact Java 2.12.0 image yielded 117 processors, 47 controller services and 1,480
+static property descriptors. The smoke suite compares all component coordinates with
+the manifest actually reported by that image. The editor and compiler accept the
+catalog's declared fields and dynamic properties, relationship routing, standalone
+scheduling and controller-service references. Existing drafts and the new fields
+share the versioned PostgreSQL JSON representation. No schema migration is needed.
+
+Verified on Linux amd64 with the pinned Java image: file content moved through
+GetFile, UpdateAttribute, RouteOnAttribute and InvokeHTTP to an HTTP receiver.
+Chromium created, saved and reopened a graph with editable processor settings,
+queues and controller services, and deployed two versions using different targets.
+See the [automated tests](../README.md#run-the-automated-smoke-tests) and [browser walkthrough](../README.md#verify-the-workspace-in-chromium).
+
+The catalog establishes image availability. Processor-specific runtime behavior for the
+remaining components, nonlocal edge networks, native Windows and Linux ARM64 operation
+still need verification. Protected secrets and authenticated agent management remain open.
+Next, qualify secure remote targeting and add real-device test flows for the MQTT, TCP,
+and database service families. [Catalog scope](PROCESSOR_CATALOG.md)
+
 ## Phase 0 — Runtime spike (2–3 weeks)
 
 Expand the tested runtime/build matrix to Windows x64 and Linux ARM64. Verify processor
-availability and offline/reconnect behavior. Prove `GetFile -> InvokeHTTP` with a real agent
-and a test receiver before claiming data-plane support.
+availability and offline/reconnect behavior. Extend the verified file-to-HTTP flow
+to each target platform.
 
 ## Phase 1 — Control plane MVP (3–5 weeks)
 
