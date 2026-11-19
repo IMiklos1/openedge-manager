@@ -24,8 +24,10 @@ class MigrationsTest(unittest.TestCase):
         upgrade_schema(database)
         upgrade_schema(database)
         with database.connect() as db:
-            self.assertEqual(db.scalar(text("SELECT version_num FROM alembic_version")), "0002")
+            self.assertEqual(db.scalar(text("SELECT version_num FROM alembic_version")), "0003")
             self.assertEqual(db.execute(text("SELECT id, status FROM flows")).one(), ("legacy", "PUBLISHED"))
             self.assertEqual(db.execute(text("SELECT id, agent_id, status FROM deployments")).one(),
                              ("legacy-deployment", None, "PENDING"))
             self.assertEqual(db.scalar(text("SELECT count(*) FROM flow_artifacts")), 0)
+            self.assertEqual(db.execute(text("SELECT flow_id, version, name FROM flow_revisions")).one(),
+                             ("legacy", 1, "Legacy flow"))

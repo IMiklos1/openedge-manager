@@ -1,0 +1,100 @@
+import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
+import { chromium } from 'playwright-core'
+
+const base = process.env.OEM_BROWSER_URL ?? 'http://127.0.0.1:5173'
+const executablePath = process.env.OEM_CHROMIUM ?? '/usr/bin/chromium'
+const agentId = process.env.OEM_BROWSER_AGENT ?? 'oem-test-agent-01'
+const browser = await chromium.launch({ executablePath })
+
+try {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+  await page.goto(base)
+  const button = name => page.getByRole('button', { name, exact: true })
+  const input = name => page.getByLabel(name, { exact: true })
+  const status = text => page.getByRole('status').filter({ hasText: text }).waitFor({ timeout: 60_000 })
+  const processor = name => input(`Configure ${name}`)
+  const deploy = async () => {
+    const created = page.waitForResponse(response => response.url().endsWith('/api/v1/deployments')
+      && response.request().method() === 'POST')
+    await button('Deploy flow').click()
+    const response = await created
+    assert.equal(response.status(), 200)
+    const item = await response.json()
+    await page.waitForFunction(async id => {
+      const state = await fetch(`/api/v1/deployments/${id}`).then(result => result.json())
+      if (state.status === 'FAILED') throw new Error(`Agent rejected deployment ${id}`)
+      return state.status === 'APPLIED'
+    }, item.id, { timeout: 60_000, polling: 500 })
+    await status('Deployment APPLIED (FULLY_APPLIED)')
+    return item
+  }
+
+  await button('Load test flow').click()
+  const flowName = `Browser flow ${randomUUID().slice(0, 8)}`
+  await input('Flow name').fill(flowName)
+  await processor('GenerateFlowFile').click()
+  await button('General').click()
+  await input('Processor name').fill('Browser generator')
+  await input('Comments').fill('Persisted processor comments')
+  await button('Scheduling').click()
+  await input('Run schedule').fill('2 sec')
+  await button('Properties').click()
+  await input('Data Format').selectOption('Text')
+  await input('Custom Text').fill('Browser sample A')
+  await input('Batch Size').fill('2')
+  await input('Attribute name').fill('sample.source')
+  await input('Attribute value').fill('browser')
+  await button('Add attribute').click()
+
+  await processor('LogAttribute').click()
+  await input('Log Prefix').fill('Browser log A')
+  await input('Log Payload').check()
+
+  await input('Inspect connection').selectOption('generated-file')
+  await input('Connection name').fill('Browser queue')
+  await input('Back pressure objects').fill('25')
+
+  await button('Save draft').click()
+  await status('Draft saved (v1)')
+  const flow = page.getByRole('button', { name: new RegExp(flowName) })
+  await flow.click()
+  await processor('Browser generator').click()
+  assert.equal(await input('Custom Text').inputValue(), 'Browser sample A')
+  assert.equal(await input('sample.source').inputValue(), 'browser')
+  await button('Scheduling').click()
+  assert.equal(await input('Run schedule').inputValue(), '2 sec')
+  await input('Inspect connection').selectOption('generated-file')
+  assert.equal(await input('Back pressure objects').inputValue(), '25')
+  assert.equal(await input('Connection name').inputValue(), 'Browser queue')
+
+  await button('Publish flow').click()
+  await status('Published v1')
+  await input('Test agent').selectOption(agentId)
+  const first = await deploy()
+
+  await processor('Browser generator').click()
+  await input('Custom Text').fill('Browser sample B')
+  await button('Save draft').click()
+  await status('Draft saved (v2)')
+  await button('Publish flow').click()
+  await status('Published v2')
+  const second = await deploy()
+  assert.notEqual(first.sha256, second.sha256)
+  assert.equal(first.flow_id, second.flow_id)
+
+  await button('v1 Published').click()
+  await processor('Browser generator').click()
+  assert.equal(await input('Custom Text').inputValue(), 'Browser sample A')
+  assert.equal(await input('Custom Text').isDisabled(), true)
+
+  await button('Edge Agents').click()
+  await input('Agent ID or hostname').fill(agentId)
+  await button('View deployments').click()
+  await input('Status').selectOption('APPLIED')
+  await page.getByRole('row').filter({ hasText: 'Version 2' }).waitFor()
+  await page.getByRole('row').filter({ hasText: 'Version 1' }).waitFor()
+  console.log('Browser passed: persisted processor, schedule and queue, deployed two revisions, reopened v1, and filtered live deployment history.')
+} finally {
+  await browser.close()
+}

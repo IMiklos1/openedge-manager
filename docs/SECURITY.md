@@ -11,8 +11,8 @@ supply just the operation ID. The optional probe issues only a read-only manifes
 inventory fields and the ACK state.
 
 Flow replacement is disabled by default. `MINIFI_FLOW_AGENT_ID` opts one disposable
-agent into the test path. The compiler accepts only its allowlisted processors and fixed
-properties. The local download path is scoped to a dispatched operation. Agent IDs and
+agent into the test path. The compiler accepts only allowlisted processors and bounded literal properties. Expression Language, parameter
+references and unrestricted regular expressions are excluded from the local compiler. The local download path is scoped to a dispatched operation. Agent IDs and
 operation IDs provide correlation in this local setup. Production rollout requires
 authenticated enrollment, scoped artifact access, and mTLS.
 

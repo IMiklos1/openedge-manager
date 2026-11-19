@@ -2,6 +2,7 @@ import json
 from uuid import NAMESPACE_URL, uuid5
 
 from .catalog import CATALOG
+from .processor_properties import PROCESSORS, QUEUE_FIELDS, resolve_fields, resolve_processor
 
 class CompileError(ValueError):
     pass
@@ -26,48 +27,64 @@ def validate_flow(definition: dict) -> list[str]:
     return errors
 
 MINIFI_VERSION = "2.12.0"
-SUPPORTED_PROCESSORS = {
-    "GenerateFlowFile": {"File Size": "1 B", "Batch Size": "1", "Data Format": "Binary"},
-    "LogAttribute": {"Log Level": "info", "Log Payload": "false"},
-}
+NODE_FIELDS = {"id", "type", "label", "description", "position", "config", "scheduling", "attributes", "auto_terminate_success"}
 
 
 def component_id(flow_id: str, *parts: str) -> str:
     return str(uuid5(NAMESPACE_URL, json.dumps(["openedge-manager", flow_id, *parts])))
 
 
-def compile_minifi_java_json(definition: dict) -> str:
+def runtime_validation(definition: dict):
     errors = validate_flow(definition)
-    nodes = definition["nodes"]
-    connections = definition["connections"]
+    nodes = definition.get("nodes", [])
+    connections = definition.get("connections", [])
     if not nodes or len(nodes) > 20 or len(connections) > 40:
         errors.append("Use 1–20 processors and at most 40 connections.")
-    if definition["parameters"]:
-        errors.append("Flow parameters are unsupported by the test compiler.")
+    if definition.get("parameters"):
+        errors.append("Flow parameters are not available in this runtime profile.")
+
+    configurations = {}
     for node in nodes:
-        if node["type"] not in SUPPORTED_PROCESSORS:
-            errors.append(f"Node {node['id']}: {node['type']} is unsupported by the test compiler.")
-        if node["config"]:
-            errors.append(f"Node {node['id']}: custom properties are unsupported.")
-    if errors:
-        raise CompileError("; ".join(errors))
+        for field in sorted(node.keys() - NODE_FIELDS):
+            errors.append(f"Node {node['id']}, {field}: unknown processor field.")
+        if node["type"] not in PROCESSORS:
+            errors.append(f"Node {node['id']}: {node['type']} is unavailable in this runtime profile.")
+            continue
+        configurations[node["id"]] = resolve_processor(node, errors)
 
     kinds = {node["id"]: node["type"] for node in nodes}
     sinks = {edge["target"] for edge in connections}
-    if not any(kind == "GenerateFlowFile" for kind in kinds.values()):
+    connected = {edge["source"] for edge in connections}
+    if "GenerateFlowFile" not in kinds.values():
         errors.append("Add at least one GenerateFlowFile processor.")
-    if any(kind == "LogAttribute" and node_id not in sinks for node_id, kind in kinds.items()):
-        errors.append("Each LogAttribute processor needs an incoming connection.")
+    if configurations and not any(settings["state"] == "RUNNING" for _, settings in configurations.values()):
+        errors.append("Keep at least one processor enabled for C2 application confirmation.")
     if len({edge["id"] for edge in connections}) != len(connections):
         errors.append("Connection IDs must be unique.")
+    for node in nodes:
+        node_id = node["id"]
+        if node["type"] == "LogAttribute" and node_id not in sinks:
+            errors.append(f"Node {node_id}: LogAttribute needs an incoming connection.")
+        termination = node.get("auto_terminate_success")
+        if termination is not None and termination == (node_id in connected):
+            errors.append(f"Node {node_id}: terminate success only when it has no outgoing connection.")
+
+    queues = {}
     for edge in connections:
-        if (kinds[edge["source"]], kinds[edge["target"]], edge["source_relationship"]) != (
+        if (kinds.get(edge["source"]), kinds.get(edge["target"]), edge["source_relationship"]) != (
             "GenerateFlowFile", "LogAttribute", "success",
         ):
             errors.append(f"Connection {edge['id']}: use GenerateFlowFile → LogAttribute over success.")
+        queues[edge["id"]] = resolve_fields(edge.get("queue", {}), QUEUE_FIELDS, f"Connection {edge['id']}", errors)
+    return errors, configurations, queues
+
+
+def compile_minifi_java_json(definition: dict) -> str:
+    errors, configurations, queues = runtime_validation(definition)
     if errors:
         raise CompileError("; ".join(errors))
-
+    nodes = definition["nodes"]
+    connections = definition["connections"]
     flow_id = definition["flow_id"]
     group_id = component_id(flow_id, "root")
     connected = {edge["source"] for edge in connections}
@@ -75,30 +92,32 @@ def compile_minifi_java_json(definition: dict) -> str:
     for index, node in enumerate(nodes):
         kind = node["type"]
         processor_id = component_id(flow_id, "processor", node["id"])
+        properties, schedule = configurations[node["id"]]
         processors.append({
             "identifier": processor_id,
             "instanceIdentifier": processor_id,
             "name": node.get("label") or kind,
-            "position": {"x": float(index * 300), "y": 0.0},
+            "comments": node.get("description") or "",
+            "position": node.get("position") or {"x": float(index * 300), "y": 0.0},
             "type": f"org.apache.nifi.processors.standard.{kind}",
             "bundle": {"group": "org.apache.nifi.minifi", "artifact": "minifi-standard-nar", "version": MINIFI_VERSION},
-            "properties": SUPPORTED_PROCESSORS[kind],
+            "properties": properties,
             "propertyDescriptors": {},
             "style": {},
-            "schedulingPeriod": "5 sec" if kind == "GenerateFlowFile" else "1 sec",
+            "schedulingPeriod": schedule["period"],
             "schedulingStrategy": "TIMER_DRIVEN",
             "executionNode": "ALL",
-            "penaltyDuration": "30 sec",
-            "yieldDuration": "1 sec",
-            "bulletinLevel": "WARN",
-            "runDurationMillis": 0,
-            "concurrentlySchedulableTaskCount": 1,
+            "penaltyDuration": schedule["penalty"],
+            "yieldDuration": schedule["yield"],
+            "bulletinLevel": schedule["bulletin_level"],
+            "runDurationMillis": schedule["run_duration_ms"],
+            "concurrentlySchedulableTaskCount": schedule["tasks"],
             "autoTerminatedRelationships": [] if node["id"] in connected else ["success"],
-            "scheduledState": "RUNNING",
-            "retryCount": 0,
-            "retriedRelationships": [],
-            "backoffMechanism": "PENALIZE_FLOWFILE",
-            "maxBackoffPeriod": "10 mins",
+            "scheduledState": schedule["state"],
+            "retryCount": schedule["retry_count"],
+            "retriedRelationships": ["success"] if schedule["retry_success"] else [],
+            "backoffMechanism": schedule["backoff"],
+            "maxBackoffPeriod": schedule["max_backoff"],
             "componentType": "PROCESSOR",
             "groupIdentifier": group_id,
         })
@@ -110,18 +129,19 @@ def compile_minifi_java_json(definition: dict) -> str:
     wired = []
     for edge in connections:
         edge_id = component_id(flow_id, "connection", edge["id"])
+        queue = queues[edge["id"]]
         wired.append({
             "identifier": edge_id,
             "instanceIdentifier": edge_id,
-            "name": edge["id"],
+            "name": edge.get("label") or edge["id"],
             "source": endpoint(edge["source"]),
             "destination": endpoint(edge["target"]),
             "selectedRelationships": ["success"],
             "labelIndex": 1,
             "zIndex": 0,
-            "backPressureObjectThreshold": 100,
-            "backPressureDataSizeThreshold": "1 MB",
-            "flowFileExpiration": "0 sec",
+            "backPressureObjectThreshold": queue["object_threshold"],
+            "backPressureDataSizeThreshold": queue["data_size_threshold"],
+            "flowFileExpiration": queue["expiration"],
             "prioritizers": [],
             "bends": [],
             "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",

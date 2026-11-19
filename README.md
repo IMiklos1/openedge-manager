@@ -37,8 +37,9 @@ $env:MINIFI_FLOW_AGENT_ID = "oem-test-agent-01"
 docker compose --profile agent up --build -d --wait
 ```
 
-Open the Flow Designer at `http://127.0.0.1:5173`. Select **Load test flow**,
-**Save draft**, then **Publish flow**. Select `oem-test-agent-01` and click **Deploy flow**.
+Open **Flow Manager** at `http://127.0.0.1:5173`. Select **Load test flow**. Click a
+processor to edit its properties, scheduling, comments and success relationship. Select a
+connection to configure its name, relationship and queue. Save the draft, then publish it. Select `oem-test-agent-01` and click **Deploy flow**.
 `ACKNOWLEDGED` records the agent's C2 result. `APPLIED` appears after a later heartbeat
 reports the published digest as the running flow. The test flow generates a one-byte FlowFile
 and sends it to LogAttribute.
@@ -60,8 +61,11 @@ docker compose --profile agent logs --tail 75 minifi-agent-01
 
 Repeat the status request as the agent checks in. The example uses a fixed draft ID. Use the
 designer or change the example ID for another draft. The API applies Alembic migrations at
-startup and keeps pre-existing drafts and deployment records. A previously published draft
-needs to be published again to compile its runtime artifact.
+startup and preserves existing records. Open a saved flow to continue editing it. Each
+successful save creates a revision and the **Versions** list opens historical revisions
+read-only. Published revisions remain available for explicit redeployment. **Edge Agents**
+shows recent heartbeats and class activity. **Deployments** shows persisted outcomes and ACKs
+with an agent and status filter.
 
 ## Run the automated smoke tests
 
@@ -109,6 +113,20 @@ For smoke-test diagnostics before cleanup, run
 `docker compose -p $smokeProject --profile smoke logs --tail 100 api c2-observer minifi-smoke-agent smoke`.
 Test results and platform coverage are in the [implementation plan](docs/IMPLEMENTATION_PLAN.md).
 
+## Verify the workspace in Chromium
+
+Start a fresh local `agent` profile with `MINIFI_FLOW_AGENT_ID=oem-test-agent-01` and an
+installed Chromium browser. The script saves and reopens a configured graph, deploys two
+distinct revisions to the real agent, and checks the deployment history.
+
+```bash
+npm --prefix frontend ci
+OEM_CHROMIUM=/usr/bin/chromium OEM_BROWSER_URL=http://127.0.0.1:5173 npm --prefix frontend run test:browser
+```
+
+In PowerShell, set `$env:OEM_CHROMIUM` to the full browser executable path and
+`$env:OEM_BROWSER_URL` to the UI origin, then run the same npm commands.
+
 ## Troubleshooting
 
 | Symptom | What to check |
@@ -123,8 +141,10 @@ Test results and platform coverage are in the [implementation plan](docs/IMPLEME
 ## Scope
 
 The local stack stores agent inventory in PostgreSQL. Redis and SeaweedFS are provisioned
-and tested for future queue and storage integration. The test compiler supports GenerateFlowFile
-and LogAttribute on MiNiFi Java 2.12.0. Compiled artifacts are immutable PostgreSQL records.
+and tested for future queue and storage integration. The compiler targets GenerateFlowFile and LogAttribute on MiNiFi Java 2.12.0. The inspector
+includes their standard property fields, timer-driven scheduling, literal generated attributes
+and bounded queue settings. The profile restricts expressions, regex syntax, processor types
+and graph topology. Compiled artifacts are immutable PostgreSQL records.
 C2 delivers an artifact to one explicitly enabled agent. Production identity, RBAC, mTLS,
 additional processors, and fleet rollout are planned.
 

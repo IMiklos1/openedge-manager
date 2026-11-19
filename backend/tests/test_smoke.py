@@ -149,6 +149,13 @@ class RealAgentC2Test(unittest.TestCase):
         agent = next(row for row in agents if row["id"] == AGENT_ID)
         self.assertEqual({key: agent[key] for key in identity}, identity)
         self.assertEqual(agent["status"], "ONLINE")
+        filtered = get_json(f"{API}{AGENTS}?agent_class=openedge-test&q={AGENT_ID}&limit=1")
+        self.assertEqual([row["id"] for row in filtered], [AGENT_ID])
+        self.assertEqual(filtered[0]["health"], "RECENT")
+        self.assertTrue(any(
+            group["name"] == "openedge-test" and group["recent"] >= 1
+            for group in get_json(f"{API}/api/v1/agent-classes")
+        ))
         last_seen = datetime.fromisoformat(agent["last_seen"])
 
         with SessionLocal() as db:

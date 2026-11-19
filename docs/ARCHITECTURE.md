@@ -27,20 +27,20 @@ image references include multi-architecture manifest digests.
 ## Canonical flow model
 OEM Flow DSL is the source of truth. A versioned compiler translates approved nodes to the
 pinned runtime configuration schema. Compiler outputs are immutable artifacts with SHA-256,
-runtime version and flow version metadata. The test compiler supports GenerateFlowFile
-and LogAttribute with fixed properties. Java artifact bytes live in PostgreSQL, with a
-separate immutable row for each published flow version.
+runtime version and flow version metadata. The compiler targets GenerateFlowFile and LogAttribute with a server-defined configuration
+catalog. It maps validated properties, position, scheduling, and queue settings into the
+Java 2.12.0 raw-flow JSON model. PostgreSQL stores an immutable graph revision on each save
+and a separate immutable artifact on publication. The current flow row uses compare-and-swap
+versioning to prevent an editor from overwriting another editor's changes.
 
-## Designer requirements
-- Processor palette with search/categories.
-- Node configuration panels generated from JSON Schema.
-- Typed ports and relationship names.
-- Queue/connection settings and back-pressure controls.
-- Validation warnings/errors on canvas.
-- Parameter contexts and environment-specific values.
-- Groups, reusable templates and annotations.
-- Draft/published versions, diff and rollback.
-- Target-class compatibility preview.
+## Flow Manager
+
+The workspace loads existing graphs and immutable revisions, edits processors and queues
+using the server's schema, and surfaces compile errors with node or connection context.
+The fleet views use the persisted agent and deployment APIs for last-seen freshness,
+reported classes, deployment attempts, and ACK state. Operators can choose an older
+published artifact explicitly. Fleet rollout policy, controller services, parameter
+contexts, and a full runtime processor catalog remain future work.
 
 ## Processor capability catalogue
 Each entry records OEM type, exact runtime build, OS/architecture availability, property schema,
