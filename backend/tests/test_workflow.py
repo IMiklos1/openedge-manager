@@ -9,14 +9,14 @@ from uuid import uuid4
 
 from app.compiler import component_id
 from app.db import SessionLocal
-from app.models import FlowArtifact
+from app.models import FlowArtifact, FlowRevision
 
 from test_smoke import AGENT_ID, OBSERVER, UI, get_json
 
 
-def post(path, payload):
+def post(path, payload, method="POST"):
     request = Request(
-        f"{UI}/api/v1{path}", data=json.dumps(payload).encode(),
+        f"{UI}/api/v1{path}", data=json.dumps(payload).encode(), method=method,
         headers={"Content-Type": "application/json"},
     )
     with urlopen(request, timeout=5) as response:
@@ -112,6 +112,85 @@ class WorkflowTest(unittest.TestCase):
             event["kind"] == "configuration" and event["operation_id"] == retry_id
             for event in get_json(OBSERVER)
         ))
+
+    def test_saved_revisions_deploy_distinct_processor_configurations(self):
+        payload = draft()
+        flow_id = payload["id"]
+        base = f"/flows/{flow_id}"
+        definition = payload["definition"]
+        generator, logger = definition["nodes"]
+        generator.update({
+            "label": "Emit saved sample", "description": "Literal test data", "position": {"x": 130, "y": 90},
+            "config": {"Data Format": "Text", "Custom Text": "first sample", "Batch Size": 2, "Mime Type": "text/plain"},
+            "attributes": {"sample.kind": "first"},
+            "scheduling": {"period": "2 sec", "bulletin_level": "INFO"},
+        })
+        logger["config"] = {"Log Prefix": "OEM sample A", "Output Format": "Single Line", "Log Payload": True}
+        definition["connections"][0]["queue"] = {"object_threshold": 16, "data_size_threshold": "128 KB", "expiration": "30 sec"}
+        self.assertEqual(post("/flows", payload)["validation_errors"], [])
+        first = post(f"{base}/publish?version=1", {})
+        self.assert_deployed(flow_id, 1, first["sha256"])
+
+        generator["config"].update({"Custom Text": "second sample", "Batch Size": 3})
+        generator["attributes"]["sample.kind"] = "second"
+        generator["scheduling"]["period"] = "3 sec"
+        logger["config"]["Log Prefix"] = "OEM sample B"
+        definition["connections"][0]["queue"]["object_threshold"] = 32
+        edit = {"expected_version": 1, "name": payload["name"], "definition": definition}
+        updated = post(base, edit, method="PUT")
+        self.assertEqual(updated["version"], 2)
+        self.assertEqual(updated["validation_errors"], [])
+        with self.assertRaises(HTTPError) as conflict:
+            post(base, edit, method="PUT")
+        with conflict.exception as response:
+            self.assertEqual(response.status, 409)
+        self.assertEqual(get_json(f"{UI}/api/v1{base}/versions/1")["definition"]["nodes"][0]["config"]["Custom Text"],
+                         "first sample")
+        stored = get_json(f"{UI}/api/v1{base}")["definition"]
+        self.assertEqual(stored["nodes"][0]["position"], {"x": 130, "y": 90})
+        self.assertEqual(stored["nodes"][0]["config"], generator["config"])
+        self.assertEqual(stored["nodes"][0]["attributes"], generator["attributes"])
+        self.assertEqual(stored["nodes"][0]["scheduling"], generator["scheduling"])
+        self.assertEqual(stored["connections"][0]["queue"], definition["connections"][0]["queue"])
+        with SessionLocal() as db:
+            self.assertEqual(db.get(FlowRevision, (flow_id, 2)).definition, stored)
+        second = post(f"{base}/publish?version=2", {})
+        self.assertNotEqual(first["sha256"], second["sha256"])
+        self.assert_deployed(flow_id, 2, second["sha256"])
+        self.assert_deployed(flow_id, 1, first["sha256"])
+
+    def assert_deployed(self, flow_id, version, digest):
+        queued = post("/deployments", {"flow_id": flow_id, "version": version, "agent_id": AGENT_ID})
+        for _ in range(60):
+            deployment = get_json(f"{UI}/api/v1/deployments/{queued['id']}")
+            self.assertNotEqual(deployment["status"], "FAILED", deployment)
+            if deployment["status"] == "APPLIED":
+                self.assertEqual(deployment["ack_state"], "FULLY_APPLIED")
+                self.assertEqual(deployment["sha256"], digest)
+                self.assertIn(
+                    {"kind": "configuration", "operation_id": queued["id"], "sha256": digest},
+                    get_json(OBSERVER),
+                )
+                self.assertTrue(any(row["id"] == queued["id"] for row in get_json(
+                    f"{UI}/api/v1/deployments?agent_id={AGENT_ID}&flow_id={flow_id}&status=APPLIED",
+                )))
+                return
+            time.sleep(1)
+        self.fail(f"Flow revision did not reach APPLIED: {deployment}")
+
+    def test_invalid_processor_configuration_is_preserved_in_unpublishable_draft(self):
+        payload = draft()
+        payload["definition"]["nodes"][0]["config"] = {
+            "File Size": "400 MB", "Custom Text": "${literal}",
+            "Batch Size": [], "Nonexistent": "test",
+        }
+        result = post("/flows", payload)
+        for name in payload["definition"]["nodes"][0]["config"]:
+            self.assertTrue(any(name in error for error in result["validation_errors"]))
+        with self.assertRaises(HTTPError) as error:
+            post(f"/flows/{payload['id']}/publish", {})
+        with error.exception as response:
+            self.assertEqual(response.status, 422)
 
     def test_unsupported_draft_cannot_be_published_or_deployed(self):
         payload = draft(processor="GetFile")

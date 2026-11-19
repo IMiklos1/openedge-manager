@@ -61,3 +61,13 @@ class Deployment(Base):
     ack_state: Mapped[str | None] = mapped_column(String(32))
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class FlowRevision(Base):
+    __tablename__ = "flow_revisions"
+    flow_id: Mapped[str] = mapped_column(ForeignKey("flows.id"), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text)
+    definition: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

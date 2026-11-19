@@ -1,18 +1,19 @@
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
-from fastapi import FastAPI, Depends, HTTPException
-from sqlalchemy import select, text
+from fastapi import FastAPI, Depends, HTTPException, Query
+from sqlalchemy import and_, case, func, select, text, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from .db import get_db
-from .models import Agent, Flow, Deployment, FlowArtifact
-from .schemas import AgentHeartbeat, FlowCreate, DeploymentCreate
+from .models import Agent, Flow, Deployment, FlowArtifact, FlowRevision
+from .schemas import AgentHeartbeat, FlowCreate, FlowEdit, DeploymentCreate
 from .catalog import CATALOG
-from .compiler import CompileError, MINIFI_VERSION, compile_minifi_java_json, validate_flow
+from .compiler import CompileError, MINIFI_VERSION, compile_minifi_java_json, runtime_validation
 from .config import settings
 from .delivery import ACTIVE, artifact_for
 from .migrate import upgrade_schema
+from .processor_properties import PROCESSORS, QUEUE_FIELDS, processor_schema
 from .c2 import router as minifi_c2_router
 
 
@@ -36,11 +37,41 @@ def health(db: Session = Depends(get_db)):
 
 @app.get("/api/v1/catalog")
 def catalog():
-    return CATALOG
+    return {kind: entries | ({"configuration": processor_schema(kind)} if kind in PROCESSORS else {})
+            for kind, entries in CATALOG.items()}
+
+
+@app.get("/api/v1/flow-editor")
+def flow_editor():
+    return {"queue": QUEUE_FIELDS, "runtime_version": MINIFI_VERSION}
+
+def agent_health(last_seen: datetime | None, recent: datetime) -> str:
+    if last_seen is None:
+        return "UNKNOWN"
+    if last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=timezone.utc)
+    return "RECENT" if last_seen >= recent else "STALE"
+
 
 @app.get("/api/v1/agents")
-def list_agents(db: Session = Depends(get_db)):
-    rows = db.query(Agent).order_by(Agent.id).all()
+def list_agents(
+    db: Session = Depends(get_db),
+    agent_class: str | None = None,
+    deployable: bool = False,
+    q: str | None = Query(None, max_length=128),
+    offset: int = Query(0, ge=0),
+    limit: int | None = Query(None, ge=1, le=200),
+):
+    query = select(Agent).order_by(Agent.id).offset(offset).limit(limit)
+    if agent_class:
+        query = query.where(Agent.agent_class == agent_class)
+    if deployable:
+        query = query.where(Agent.id == settings.minifi_flow_agent_id,
+                            Agent.runtime == "minifi-java", Agent.runtime_version == MINIFI_VERSION)
+    if q:
+        query = query.where(Agent.id.icontains(q, autoescape=True) | Agent.hostname.icontains(q, autoescape=True))
+    rows = db.scalars(query).all()
+    recent = datetime.now(timezone.utc) - timedelta(seconds=30)
     return [{
         "id": a.id, "hostname": a.hostname, "os_name": a.os_name,
         "architecture": a.architecture, "runtime": a.runtime,
@@ -48,8 +79,23 @@ def list_agents(db: Session = Depends(get_db)):
         "status": a.status, "reported_flow_version": a.reported_flow_version,
         "can_deploy_flow": a.id == settings.minifi_flow_agent_id and a.runtime == "minifi-java"
         and a.runtime_version == MINIFI_VERSION,
-        "last_seen": a.last_seen.isoformat() if a.last_seen else None
+        "last_seen": a.last_seen.isoformat() if a.last_seen else None,
+        "health": agent_health(a.last_seen, recent),
     } for a in rows]
+
+@app.get("/api/v1/agent-classes")
+def list_agent_classes(
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    recent = datetime.now(timezone.utc) - timedelta(seconds=30)
+    counts = db.execute(
+        select(Agent.agent_class, func.count(Agent.id), func.sum(case((Agent.last_seen >= recent, 1), else_=0)))
+        .group_by(Agent.agent_class).order_by(Agent.agent_class).limit(limit).offset(offset),
+    )
+    return [{"name": name, "agents": total, "recent": healthy} for name, total, healthy in counts]
+
 
 @app.post("/api/v1/agents/{agent_id}/heartbeat")
 def oem_dev_heartbeat(agent_id: str, payload: AgentHeartbeat, db: Session = Depends(get_db)):
@@ -64,36 +110,115 @@ def oem_dev_heartbeat(agent_id: str, payload: AgentHeartbeat, db: Session = Depe
     return {"accepted": True, "agent_id": agent_id, "note": "OEM dev API, not MiNiFi C2"}
 
 @app.get("/api/v1/flows")
-def list_flows(db: Session = Depends(get_db)):
-    return [{"id": f.id, "name": f.name, "version": f.current_version, "status": f.status}
-            for f in db.query(Flow).order_by(Flow.name).all()]
+def list_flows(
+    db: Session = Depends(get_db),
+    offset: int = Query(0, ge=0),
+    limit: int | None = Query(None, ge=1, le=200),
+):
+    rows = db.scalars(select(Flow).order_by(Flow.name, Flow.id).offset(offset).limit(limit))
+    return [{"id": f.id, "name": f.name, "version": f.current_version, "status": f.status} for f in rows]
+
+
+def flow_definition(payload: FlowCreate | FlowEdit, flow_id: str) -> dict:
+    definition = payload.definition.model_dump()
+    description = payload.description if payload.description is not None else definition["description"]
+    return definition | {"flow_id": flow_id, "name": payload.name, "description": description}
+
+
+def draft_result(flow_id: str, version: int, definition: dict) -> dict:
+    errors, _, _ = runtime_validation(definition)
+    return {"id": flow_id, "version": version, "validation_errors": errors}
+
 
 @app.post("/api/v1/flows")
 def create_flow(payload: FlowCreate, db: Session = Depends(get_db)):
-    if db.get(Flow, payload.id):
-        raise HTTPException(409, "Flow ID already exists")
-    definition = payload.definition.model_dump()
-    errors = validate_flow(definition)
-    flow = Flow(id=payload.id, name=payload.name, description=payload.description,
+    definition = flow_definition(payload, payload.id)
+    flow = Flow(id=payload.id, name=payload.name, description=definition["description"],
                 current_version=1, definition=definition, status="DRAFT")
     db.add(flow)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        if db.get(Flow, payload.id):
+            raise HTTPException(409, "Flow ID already exists") from exc
+        raise
+    db.add(FlowRevision(flow_id=flow.id, version=1, name=flow.name,
+                        description=flow.description, definition=definition))
     db.commit()
-    return {"id": flow.id, "version": flow.current_version, "validation_errors": errors}
+    return draft_result(flow.id, 1, definition)
+
+
+@app.put("/api/v1/flows/{flow_id}")
+def edit_flow(flow_id: str, payload: FlowEdit, db: Session = Depends(get_db)):
+    definition = flow_definition(payload, flow_id)
+    next_version = payload.expected_version + 1
+    result = db.execute(
+        update(Flow).where(Flow.id == flow_id, Flow.current_version == payload.expected_version)
+        .values(name=payload.name, description=definition["description"], current_version=next_version,
+                definition=definition, status="DRAFT"),
+    )
+    if result.rowcount == 0:
+        if db.get(Flow, flow_id) is None:
+            raise HTTPException(404, "Flow not found")
+        raise HTTPException(409, "Flow changed. Reload the latest revision before saving.")
+    db.add(FlowRevision(flow_id=flow_id, version=next_version, name=payload.name,
+                        description=definition["description"], definition=definition))
+    db.commit()
+    return draft_result(flow_id, next_version, definition)
+
 
 @app.get("/api/v1/flows/{flow_id}")
 def get_flow(flow_id: str, db: Session = Depends(get_db)):
     flow = db.get(Flow, flow_id)
     if not flow:
         raise HTTPException(404, "Flow not found")
-    return {"id": flow.id, "name": flow.name, "version": flow.current_version,
-            "status": flow.status, "definition": flow.definition,
-            "validation_errors": validate_flow(flow.definition)}
+    artifact = db.get(FlowArtifact, (flow_id, flow.current_version))
+    return draft_result(flow.id, flow.current_version, flow.definition) | {
+        "name": flow.name, "description": flow.description, "status": flow.status,
+        "definition": flow.definition, "published_sha256": artifact.sha256 if artifact else None,
+    }
+
+
+@app.get("/api/v1/flows/{flow_id}/versions")
+def flow_versions(
+    flow_id: str,
+    db: Session = Depends(get_db),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+):
+    if db.get(Flow, flow_id) is None:
+        raise HTTPException(404, "Flow not found")
+    rows = db.execute(
+        select(FlowRevision, FlowArtifact.sha256)
+        .outerjoin(FlowArtifact, and_(FlowRevision.flow_id == FlowArtifact.flow_id,
+                                     FlowRevision.version == FlowArtifact.version))
+        .where(FlowRevision.flow_id == flow_id).order_by(FlowRevision.version.desc()).offset(offset).limit(limit),
+    )
+    return [{"version": revision.version, "name": revision.name,
+             "created_at": revision.created_at, "sha256": digest} for revision, digest in rows]
+
+
+@app.get("/api/v1/flows/{flow_id}/versions/{version}")
+def flow_version(flow_id: str, version: int, db: Session = Depends(get_db)):
+    revision = db.get(FlowRevision, (flow_id, version))
+    if revision is None:
+        raise HTTPException(404, "Flow version not found")
+    artifact = db.get(FlowArtifact, (flow_id, version))
+    return draft_result(flow_id, version, revision.definition) | {
+        "name": revision.name, "description": revision.description,
+        "status": "PUBLISHED" if artifact else "DRAFT", "definition": revision.definition,
+        "published_sha256": artifact.sha256 if artifact else None,
+    }
+
 
 @app.post("/api/v1/flows/{flow_id}/publish")
-def publish_flow(flow_id: str, db: Session = Depends(get_db)):
+def publish_flow(flow_id: str, db: Session = Depends(get_db), version: int | None = Query(None, ge=1)):
     flow = db.get(Flow, flow_id, with_for_update=True)
     if not flow:
         raise HTTPException(404, "Flow not found")
+    if version is not None and version != flow.current_version:
+        raise HTTPException(409, "Flow changed. Reload the latest revision before publishing.")
     artifact = db.get(FlowArtifact, (flow.id, flow.current_version))
     if artifact is None:
         try:
@@ -126,6 +251,7 @@ def deployment_result(deployment: Deployment, artifact: FlowArtifact | None) -> 
         "ack_state": deployment.ack_state,
         "acknowledged_at": deployment.acknowledged_at,
         "applied_at": deployment.applied_at,
+        "created_at": deployment.created_at,
     }
 
 
@@ -134,9 +260,12 @@ def create_deployment(payload: DeploymentCreate, db: Session = Depends(get_db)):
     flow = db.get(Flow, payload.flow_id)
     if not flow:
         raise HTTPException(404, "Flow not found")
-    if flow.status != "PUBLISHED":
+    version = payload.version or flow.current_version
+    if payload.version is None and flow.status != "PUBLISHED":
         raise HTTPException(409, "Flow must be published before deployment")
-    deployment = Deployment(flow_id=flow.id, flow_version=flow.current_version, status="PENDING")
+    if payload.version is not None and db.get(FlowArtifact, (flow.id, version)) is None:
+        raise HTTPException(409, "The specified flow version has not been published")
+    deployment = Deployment(flow_id=flow.id, flow_version=version, status="PENDING")
     if payload.agent_id is None:
         if payload.target_class is None:
             raise HTTPException(422, "Select an agent or provide a target class")
@@ -166,6 +295,32 @@ def create_deployment(payload: DeploymentCreate, db: Session = Depends(get_db)):
             raise HTTPException(409, "Agent already has an active flow deployment") from exc
         raise
     return deployment_result(deployment, artifact)
+
+
+@app.get("/api/v1/deployments")
+def list_deployments(
+    db: Session = Depends(get_db),
+    flow_id: str | None = None,
+    agent_id: str | None = None,
+    status: str | None = None,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+):
+    query = (
+        select(Deployment, FlowArtifact, FlowRevision.name)
+        .outerjoin(FlowArtifact, and_(Deployment.agent_id.is_not(None),
+                                     Deployment.flow_id == FlowArtifact.flow_id,
+                                     Deployment.flow_version == FlowArtifact.version))
+        .outerjoin(FlowRevision, and_(Deployment.flow_id == FlowRevision.flow_id,
+                                     Deployment.flow_version == FlowRevision.version))
+        .order_by(Deployment.created_at.desc(), Deployment.id.desc()).offset(offset).limit(limit)
+    )
+    for column, value in ((Deployment.flow_id, flow_id), (Deployment.agent_id, agent_id),
+                          (Deployment.status, status)):
+        if value:
+            query = query.where(column == value)
+    return [deployment_result(deployment, artifact) | {"flow_name": name}
+            for deployment, artifact, name in db.execute(query)]
 
 
 @app.get("/api/v1/deployments/{deployment_id}")
