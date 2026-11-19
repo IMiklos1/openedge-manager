@@ -11,6 +11,13 @@ class Settings(BaseSettings):
     postgres_password: str | None = None
     minifi_probe_agent_id: str = ""
     minifi_flow_agent_id: str = ""
+    minifi_flow_agent_ids: str = ""
+    minifi_allow_execution_processors: bool = False
+
+    @property
+    def flow_agent_ids(self) -> frozenset[str]:
+        ids = {agent.strip() for agent in self.minifi_flow_agent_ids.split(",")}
+        return frozenset((ids | {self.minifi_flow_agent_id}) - {""})
 
     def database_connection(self) -> str | URL:
         if self.database_url:

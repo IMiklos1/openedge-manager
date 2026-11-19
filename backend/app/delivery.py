@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -6,11 +7,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .models import Deployment, FlowArtifact
+from .models import Agent, Deployment, FlowArtifact
 
 ACTIVE = ("PENDING", "DISPATCHED", "ACKNOWLEDGED")
 DELIVERABLE = ("PENDING", "DISPATCHED")
 SUCCESS_ACK = ("FULLY_APPLIED", "NO_OPERATION")
+EXECUTION_TYPES = {
+    "org.apache.nifi.processors.standard.ExecuteProcess",
+    "org.apache.nifi.processors.standard.ExecuteStreamCommand",
+}
 
 
 class ConfigurationArguments(BaseModel):
@@ -29,10 +34,30 @@ def artifact_for(db: Session, deployment: Deployment) -> FlowArtifact:
     return db.get(FlowArtifact, (deployment.flow_id, deployment.flow_version))
 
 
+def artifact_components(artifact: FlowArtifact) -> list[dict]:
+    root = json.loads(artifact.content)["rootGroup"]
+    return root["processors"] + root.get("controllerServices", [])
+
+
+def permits_execution(components: list[dict]) -> bool:
+    return settings.minifi_allow_execution_processors or all(item["type"] not in EXECUTION_TYPES for item in components)
+
+
+def missing_agent_components(agent: Agent, components: list[dict]) -> list[str]:
+    manifest = agent.capabilities.get("minifi_components") or []
+    advertised = {tuple(entry) for entry in manifest if isinstance(entry, list) and len(entry) == 4
+                  and all(isinstance(value, str) for value in entry)}
+    return sorted({
+        component["type"]
+        for component in components
+        if (component["type"], *(component["bundle"][key] for key in ("group", "artifact", "version"))) not in advertised
+    })
+
+
 def flow_update(
     db: Session, agent_id: str, reported_flow_id: str | None, seen_at: datetime,
 ) -> UpdateConfiguration | None:
-    if agent_id != settings.minifi_flow_agent_id:
+    if agent_id not in settings.flow_agent_ids:
         return None
     deployment = db.scalar(
         select(Deployment).where(Deployment.agent_id == agent_id, Deployment.status.in_(ACTIVE)).with_for_update(),
@@ -47,6 +72,9 @@ def flow_update(
             deployment.applied_at = seen_at
         return None
 
+    components = artifact_components(artifact)
+    if not permits_execution(components) or missing_agent_components(db.get(Agent, agent_id), components):
+        return None
     deployment.status = "DISPATCHED"
     return UpdateConfiguration(
         identifier=deployment.id,
@@ -64,7 +92,7 @@ def acknowledge_flow_update(
     if (
         deployment is None
         or not deployment.agent_id
-        or deployment.agent_id != settings.minifi_flow_agent_id
+        or deployment.agent_id not in settings.flow_agent_ids
         or (agent_id is not None and agent_id != deployment.agent_id)
     ):
         raise HTTPException(404, "Unknown C2 operation")

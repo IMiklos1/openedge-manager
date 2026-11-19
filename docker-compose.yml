@@ -53,6 +53,8 @@ services:
       POSTGRES_HOST: postgres
       MINIFI_PROBE_AGENT_ID: ${MINIFI_PROBE_AGENT_ID:-}
       MINIFI_FLOW_AGENT_ID: ${MINIFI_FLOW_AGENT_ID:-}
+      MINIFI_FLOW_AGENT_IDS: ${MINIFI_FLOW_AGENT_IDS:-}
+      MINIFI_ALLOW_EXECUTION_PROCESSORS: ${MINIFI_ALLOW_EXECUTION_PROCESSORS:-false}
     ports: ["127.0.0.1:${OEM_API_PORT:-8000}:8000"]
     depends_on:
       postgres: {condition: service_healthy}
@@ -85,6 +87,16 @@ services:
       service: minifi-agent-01
     environment: *local-http
 
+  minifi-agent-02:
+    profiles: [fleet]
+    extends:
+      file: compose.minifi.yaml
+      service: minifi-agent-01
+    hostname: oem-test-agent-02
+    environment:
+      <<: *local-http
+      C2_AGENT_IDENTIFIER: oem-test-agent-02
+
   c2-observer:
     profiles: [smoke]
     build:
@@ -101,6 +113,7 @@ services:
       retries: 15
 
   minifi-smoke-agent:
+    volumes: [smokeinput:/tmp/oem-smoke-input]
     profiles: [smoke]
     extends:
       file: compose.minifi.yaml
@@ -114,6 +127,7 @@ services:
       c2-observer: {condition: service_healthy}
 
   smoke:
+    volumes: [smokeinput:/tmp/oem-smoke-input]
     profiles: [smoke]
     build:
       context: ./backend
@@ -132,3 +146,4 @@ volumes:
   pgdata:
   redisdata:
   s3data:
+  smokeinput:

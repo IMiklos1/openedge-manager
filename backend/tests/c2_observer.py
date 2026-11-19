@@ -13,6 +13,7 @@ from starlette.concurrency import run_in_threadpool
 
 app = FastAPI()
 observations = deque(maxlen=64)
+received_data = deque(maxlen=64)
 
 
 def forward(operation, body=None, headers=None):
@@ -30,6 +31,18 @@ def forward(operation, body=None, headers=None):
 @app.get("/observations")
 async def get_observations():
     return list(observations)
+
+
+@app.get("/test-data")
+def received():
+    return list(received_data)
+
+
+@app.post("/test-data", status_code=204)
+async def receive(request: Request):
+    body = await request.body()
+    received_data.append({"sha256": sha256(body).hexdigest(), "labels": request.headers.get("x-oem-test")})
+    return Response(status_code=204)
 
 
 @app.post("/c2-protocol/{operation}")

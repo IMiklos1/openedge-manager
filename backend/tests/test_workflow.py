@@ -1,15 +1,19 @@
 """Deploy a compiled flow through the real Java agent's outbound C2 connection."""
 
 import json
+import os
 import time
 import unittest
+from hashlib import sha256
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from app.compiler import component_id
+from app.catalog import CONTROLLER_SERVICES, PROCESSORS
 from app.db import SessionLocal
-from app.models import FlowArtifact, FlowRevision
+from app.models import Agent, Flow, FlowArtifact, FlowRevision
 
 from test_smoke import AGENT_ID, OBSERVER, UI, get_json
 
@@ -37,6 +41,73 @@ def draft(processor="GenerateFlowFile"):
 
 
 class WorkflowTest(unittest.TestCase):
+    def test_catalog_file_route_and_http_payload_on_real_agent(self):
+        catalog = get_json(f"{UI}/api/v1/catalog")
+        self.assertEqual({key for key, value in catalog.items() if "configuration" in value}, set(PROCESSORS))
+        self.assertEqual(len(PROCESSORS), 117)
+        editor = get_json(f"{UI}/api/v1/flow-editor")
+        self.assertEqual(set(editor["controller_services"]), set(CONTROLLER_SERVICES))
+        self.assertEqual(len(CONTROLLER_SERVICES), 47)
+        expected_components = {
+            (entry["type"], *(entry["bundle"][key] for key in ("group", "artifact", "version")))
+            for catalog_entries in (PROCESSORS, CONTROLLER_SERVICES)
+            for entry in catalog_entries.values()
+        }
+        with SessionLocal() as db:
+            observed = {tuple(entry) for entry in db.get(Agent, AGENT_ID).capabilities["minifi_components"]}
+        self.assertEqual(expected_components - observed, set())
+        payload = draft()
+        flow_id = payload["id"]
+        name = f"{flow_id}.txt"
+        data = f"real edge data {flow_id}".encode()
+        input_directory = Path("/tmp/oem-smoke-input") / flow_id
+        input_directory.mkdir()
+        # The pinned image runs the agent as uid/gid 1000. GetFile requires a writable directory.
+        os.chown(input_directory, 1000, 1000)
+        (input_directory / name).write_bytes(data)
+        definition = payload["definition"]
+        definition["nodes"] = [
+            {
+                "id": "file", "type": "GetFile", "scheduling": {"period": "1 sec"},
+                "config": {"Input Directory": str(input_directory), "File Filter": name,
+                           "Keep Source File": True, "Polling Interval": "1 sec"},
+            },
+            {
+                "id": "attribute", "type": "UpdateAttribute",
+                "attributes": {"oem.milestone": "${filename}"},
+            },
+            {
+                "id": "route", "type": "RouteOnAttribute",
+                "attributes": {"example": "${oem.milestone:isEmpty():not()}"},
+            },
+            {
+                "id": "http", "type": "InvokeHTTP",
+                "config": {"HTTP Method": "POST", "HTTP URL": "http://c2-observer:8001/test-data"},
+                "attributes": {"x-oem-test": "${oem.milestone}"},
+            },
+        ]
+        definition["connections"] = [
+            {"id": "file", "source": "file", "target": "attribute"},
+            {"id": "enriched", "source": "attribute", "target": "route"},
+            {"id": "example", "source": "route", "source_relationship": "example", "target": "http"},
+        ]
+        self.assertEqual(post("/flows", payload)["validation_errors"], [])
+        base = f"/flows/{flow_id}"
+        stored = get_json(f"{UI}/api/v1{base}")["definition"]
+        self.assertEqual(stored["nodes"][1]["attributes"], definition["nodes"][1]["attributes"])
+        self.assertEqual(stored["connections"][2]["source_relationship"], "example")
+        with SessionLocal() as db:
+            self.assertEqual(db.get(FlowRevision, (flow_id, 1)).definition, stored)
+        self.assert_deployed(flow_id, 1, post(f"{base}/publish", {})["sha256"])
+        expected = {"sha256": sha256(data).hexdigest(), "labels": name}
+        for _ in range(25):
+            if expected in get_json("http://c2-observer:8001/test-data"):
+                print(f"MiNiFi sent file payload {expected['sha256']} to the real HTTP receiver")
+                break
+            time.sleep(1)
+        else:
+            self.fail("MiNiFi did not send the file and its dynamic header to the HTTP receiver")
+
     def test_real_agent_downloads_applies_and_runs_flow(self):
         payload = draft()
         flow_id = payload["id"]
@@ -178,6 +249,53 @@ class WorkflowTest(unittest.TestCase):
             time.sleep(1)
         self.fail(f"Flow revision did not reach APPLIED: {deployment}")
 
+    def test_controller_services_transform_data_on_real_agent(self):
+        payload = draft()
+        flow_id = payload["id"]
+        definition = payload["definition"]
+        body = json.dumps({"check": flow_id}, separators=(",", ":"))
+        definition["nodes"] = [
+            {"id": "generate", "type": "GenerateFlowFile", "config": {"Data Format": "Text", "Custom Text": body}},
+            {"id": "convert", "type": "ConvertRecord",
+             "config": {"Record Reader": "reader", "Record Writer": "writer"}},
+            {"id": "http", "type": "InvokeHTTP",
+             "config": {"HTTP Method": "POST", "HTTP URL": "http://c2-observer:8001/test-data"},
+             "attributes": {"x-oem-test": flow_id}},
+        ]
+        definition["controller_services"] = [
+            {"id": "reader", "type": "JsonTreeReader", "label": "JSON reader"},
+            {"id": "writer", "type": "JsonRecordSetWriter", "config": {"Output Grouping": "output-array"}},
+        ]
+        definition["connections"] = [
+            {"id": "input", "source": "generate", "target": "convert"},
+            {"id": "output", "source": "convert", "target": "http"},
+        ]
+        self.assertEqual(post("/flows", payload)["validation_errors"], [])
+        stored = get_json(f"{UI}/api/v1/flows/{flow_id}")["definition"]
+        with SessionLocal() as db:
+            self.assertEqual(db.get(FlowRevision, (flow_id, 1)).definition, stored)
+        artifact = post(f"/flows/{flow_id}/publish", {})
+        self.assert_deployed(flow_id, 1, artifact["sha256"])
+        expected = {"sha256": sha256(f"[{body}]".encode()).hexdigest(), "labels": flow_id}
+        for _ in range(25):
+            if expected in get_json("http://c2-observer:8001/test-data"):
+                print(f"MiNiFi sent the converted JSON array {expected['sha256']} to the real HTTP receiver")
+                break
+            time.sleep(1)
+        else:
+            self.fail("The receiver did not get the JSON array produced by ConvertRecord")
+
+    def test_execution_processors_require_a_separate_deployment_opt_in(self):
+        payload = draft("ExecuteProcess")
+        flow_id = payload["id"]
+        payload["definition"]["nodes"][0]["config"] = {"Command": "/bin/true"}
+        self.assertEqual(post("/flows", payload)["validation_errors"], [])
+        post(f"/flows/{flow_id}/publish", {})
+        with self.assertRaises(HTTPError) as error:
+            post("/deployments", {"flow_id": flow_id, "agent_id": AGENT_ID})
+        with error.exception as response:
+            self.assertEqual(response.status, 403)
+
     def test_invalid_processor_configuration_is_preserved_in_unpublishable_draft(self):
         payload = draft()
         payload["definition"]["nodes"][0]["config"] = {
@@ -192,8 +310,21 @@ class WorkflowTest(unittest.TestCase):
         with error.exception as response:
             self.assertEqual(response.status, 422)
 
+    def test_sensitive_descriptors_are_visible_but_values_are_not_persisted(self):
+        catalog = get_json(f"{UI}/api/v1/catalog")
+        self.assertTrue(catalog["InvokeHTTP"]["configuration"]["properties"]["Request Password"]["sensitive"])
+        payload = draft("InvokeHTTP")
+        payload["definition"]["nodes"][0]["config"] = {"Request Password": "dummy-test-value"}
+        with self.assertRaises(HTTPError) as error:
+            post("/flows", payload)
+        with error.exception as response:
+            self.assertEqual(response.status, 422)
+            self.assertNotIn(b"dummy-test-value", response.read())
+        with SessionLocal() as db:
+            self.assertIsNone(db.get(Flow, payload["id"]))
+
     def test_unsupported_draft_cannot_be_published_or_deployed(self):
-        payload = draft(processor="GetFile")
+        payload = draft(processor="ConsumeKafka")
         flow_id = payload["id"]
         post("/flows", payload)
         for path, body, expected in (
