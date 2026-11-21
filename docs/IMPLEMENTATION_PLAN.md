@@ -124,6 +124,22 @@ verified visibility of a disabled inventory entry and reloaded previously saved 
 Native Windows, ARM64, physical remote devices and authenticated production enrollment
 are still open. [Reproduction commands](../README.md#verify-the-workspace-in-chromium)
 
+## Mixed Java and C++ deployment
+
+The pinned Java 2.12.0 and C++ 1.1.0 agents run side by side. OEM detects the runtime
+from its first full C2 manifest and uses the matching artifact builder, catalog and
+C2 download arguments. Migration 0004 preserves the Java identity of existing artifacts.
+The C++ editor exposes GenerateFlowFile, UpdateAttribute and LogAttribute.
+
+Verified on Linux amd64 with 21 mixed Compose smoke tests and the Chromium workspace
+test. Both real agents applied two distinct revisions. The native smoke test verified
+artifact download digests, correlated acknowledgements and LogAttribute input counts.
+Chromium verified the runtime picker, a blocked cross-runtime target, persisted native
+properties, Java controller services, revision reopening and deployment states.
+Native Windows, Linux ARM64, physical remote devices, C++ processors beyond the three
+exposed types and production enrollment remain open.
+[Reproduction commands](../README.md#mixed-runtime-smoke-tests)
+
 ## Phase 0 — Runtime spike (2–3 weeks)
 
 Expand the tested runtime/build matrix to Windows x64 and Linux ARM64. Verify processor

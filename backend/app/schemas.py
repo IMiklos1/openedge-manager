@@ -51,6 +51,7 @@ class Connection(BaseModel):
 
 class FlowDefinition(BaseModel):
     schema_version: Literal["1.0"]
+    runtime: Literal["minifi-java", "minifi-cpp"] = "minifi-java"
     flow_id: str
     name: str
     description: str | None = None

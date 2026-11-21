@@ -12,6 +12,8 @@ jobs:
     env:
       MINIFI_PROBE_AGENT_ID: oem-smoke-agent-01
       MINIFI_FLOW_AGENT_ID: oem-smoke-agent-01
+      MINIFI_FLOW_AGENT_IDS: oem-test-agent-cpp
+      OEM_CPP_C2_ORIGIN: http://c2-observer:8001
       OEM_API_PORT: "0"
       OEM_UI_PORT: "0"
     steps:
@@ -24,6 +26,8 @@ jobs:
           docker compose --profile agent config --quiet
           docker compose --profile smoke config --quiet
           docker compose --profile agent --profile fleet config --quiet
-      - run: docker compose --profile smoke up --build --exit-code-from smoke
+          docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml --profile agent --profile cpp config --quiet
+          docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml --profile smoke config --quiet
+      - run: docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml --profile smoke up --build --exit-code-from smoke
       - if: always()
-        run: docker compose --profile smoke down
+        run: docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml --profile smoke down

@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request, Response
 from starlette.concurrency import run_in_threadpool
 
 app = FastAPI()
-observations = deque(maxlen=64)
+observations = deque(maxlen=128)
 received_data = deque(maxlen=64)
 
 
@@ -64,7 +64,7 @@ async def observe(operation: Literal["heartbeat", "acknowledge"], request: Reque
                 "id": agent["identifier"],
                 "agent_class": agent.get("agentClass"),
                 "runtime": manifest.get("agentType"),
-                "runtime_version": manifest.get("version"),
+                "runtime_version": manifest.get("version") or (manifest.get("buildInfo") or {}).get("version"),
                 "hostname": network.get("hostname"),
                 "os_name": system.get("operatingSystem"),
                 "architecture": system.get("machineArch"),

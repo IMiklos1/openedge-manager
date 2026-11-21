@@ -143,7 +143,7 @@ export function ProcessorInspector({ node, schema, change, disabled, errors, ser
         <label className="input-field">Comments<textarea value={node.description ?? ''} disabled={disabled}
           onChange={event => change({ ...node, description: event.target.value || null })}/></label>
         {schema && <p className="muted">{schema.bundle.artifact} {schema.bundle.version}</p>}
-      </> : !schema ? <p className="muted">This processor is outside the pinned Java image.</p>
+      </> : !schema ? <p className="muted">This processor is unavailable in the selected runtime.</p>
         : section === 'Scheduling' ? <>
           <div className="muted">Timer driven</div>
           <Fields fields={Object.fromEntries(Object.entries(schema.scheduling).filter(([key]) => key !== 'retry_success'))}
@@ -164,13 +164,13 @@ export function ProcessorInspector({ node, schema, change, disabled, errors, ser
                   disabled={disabled || node.auto_terminate == null || connected.includes(relationship)}
                   onChange={event => change({ ...node, auto_terminate: event.target.checked
                     ? [...terminated, relationship] : terminated.filter(item => item !== relationship) })}/></label>
-              <label className="check-field"><span>Retry</span><input type="checkbox" checked={retry} disabled={disabled}
+              {schema.scheduling.retry_count && <label className="check-field"><span>Retry</span><input type="checkbox" checked={retry} disabled={disabled}
                 onChange={event => change({ ...node,
                   scheduling: { ...node.scheduling, retry_success: false },
                   retry_relationships: event.target.checked ? [...new Set([...(node.retry_relationships ?? []),
                     ...(legacyRetry ? ['success'] : []), relationship])]
                     : (node.retry_relationships ?? []).filter(item => item !== relationship),
-                })}/></label>
+                })}/></label>}
             </fieldset>
           })}
         </> : <ComponentProperties component={node} schema={schema} disabled={disabled} services={services}

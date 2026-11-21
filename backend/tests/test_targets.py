@@ -20,7 +20,7 @@ class DeploymentTargetsTest(unittest.TestCase):
             "minifi_enable_compose_test_targets": True,
         }
         cases = (
-            ({}, {"oem-test-agent-01", "oem-test-agent-02"}),
+            ({}, {"oem-test-agent-01", "oem-test-agent-02", "oem-test-agent-cpp"}),
             ({"minifi_enable_compose_test_targets": False}, set()),
             ({"minifi_flow_agent_id": " lab-01 "}, {"lab-01"}),
             ({"minifi_flow_agent_id": "lab-01", "minifi_flow_agent_ids": " lab-02 ,lab-01,"}, {"lab-01", "lab-02"}),

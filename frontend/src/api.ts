@@ -1,3 +1,6 @@
+export const runtimeLabels = { 'minifi-java': 'MiNiFi Java', 'minifi-cpp': 'MiNiFi C++' } as const
+export type Runtime = keyof typeof runtimeLabels
+
 export type Value = string | number | boolean
 export type Values = Record<string, Value>
 
@@ -100,6 +103,7 @@ export interface FlowConnection {
 
 export interface Definition {
   schema_version: '1.0'
+  runtime?: Runtime
   flow_id: string
   name: string
   description?: string | null
@@ -154,6 +158,7 @@ export interface PublishedFlow {
   id: string
   version: number
   sha256: string
+  runtime: Runtime
   runtime_version: string
 }
 

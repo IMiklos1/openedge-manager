@@ -45,6 +45,7 @@ class FlowArtifact(Base):
     flow_id: Mapped[str] = mapped_column(ForeignKey("flows.id"), primary_key=True)
     version: Mapped[int] = mapped_column(Integer, primary_key=True)
     runtime_version: Mapped[str] = mapped_column(String(100))
+    runtime: Mapped[str] = mapped_column(String(100), server_default="minifi-java")
     sha256: Mapped[str] = mapped_column(String(64))
     content: Mapped[str] = mapped_column(Text)
 

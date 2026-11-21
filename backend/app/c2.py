@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from .catalog import MINIFI_VERSION
+from .runtimes import CPP, JAVA
 from .config import settings
 from .db import get_db
 from .models import Agent, C2Probe, Deployment
@@ -46,7 +46,7 @@ class AgentBundle(BaseModel):
 
 
 class AgentManifest(BaseModel):
-    agentType: Literal["minifi-java"] | None = None
+    agentType: RuntimeVersion | None = None
     version: RuntimeVersion | None = None
     buildInfo: BuildInfo | None = None
     bundles: list[AgentBundle] | None = None
@@ -143,16 +143,22 @@ def heartbeat(
     system = device.systemInfo if device else None
     network = device.networkInfo if device else None
     build = manifest.buildInfo if manifest else None
-    version = manifest.version if manifest else None
+    # Full manifests identify the implementation. Lightweight heartbeats preserve it.
+    runtime = {"minifi-java": JAVA, "cpp": CPP}.get(manifest.agentType, "unknown") if manifest and manifest.agentType else None
+    previous = db.get(Agent, info.identifier) if runtime is not None else None
+    version = (manifest.version or (build.version if build else None)) if runtime is not None else None
     reported_values = {
         "agent_class": info.agentClass,
-        "runtime_version": version or (build.version if build else None),
+        "runtime_version": version,
+        "runtime": runtime,
         "hostname": network.hostname if network else None,
         "os_name": system.operatingSystem if system else None,
         "architecture": system.machineArch if system else None,
     }
     values = {key: value for key, value in reported_values.items() if value}
-    if manifest and manifest.bundles is not None:
+    if previous is not None and previous.runtime != runtime:
+        values.update(runtime_version=version, capabilities={})
+    if runtime in (JAVA, CPP) and manifest.bundles is not None:
         # Store only component identities, omitting descriptions, configuration and other wire metadata.
         extensions = []
         for bundle in manifest.bundles:
@@ -163,11 +169,12 @@ def heartbeat(
                 extensions.append([entry.type, *coordinates])
         values["capabilities"] = {MANIFEST_COMPONENTS: sorted(extensions)}
     seen_at = datetime.now(timezone.utc)
-    values.update(runtime="minifi-java", status="ONLINE", last_seen=seen_at)
+    values.update(status="ONLINE", last_seen=seen_at)
     insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
-    db.execute(insert(Agent).values(id=info.identifier, **values).on_conflict_do_update(
+    result = db.execute(insert(Agent).values(id=info.identifier, **values).on_conflict_do_update(
         index_elements=[Agent.id], set_=values,
-    ))
+    ).returning(Agent), execution_options={"populate_existing": True})
+    agent = result.scalar_one()
 
     operations = []
     if info.identifier == settings.minifi_probe_agent_id:
@@ -179,11 +186,9 @@ def heartbeat(
         if probe.ack_state is None:
             operations.append(DescribeManifest(identifier=probe.operation_id))
     running_flow = payload.flowInfo.flowId if payload.flowInfo and payload.flowInfo.runStatus == "RUNNING" else None
-    # Only a heartbeat from the pinned runtime may receive a compiled flow.
-    if info.identifier in settings.flow_agent_ids and db.get(Agent, info.identifier).runtime_version == MINIFI_VERSION:
-        command = flow_update(db, info.identifier, running_flow, seen_at)
-        if command is not None:
-            operations.append(command)
+    command = flow_update(db, agent, running_flow, seen_at)
+    if command is not None:
+        operations.append(command)
     db.commit()
     return HeartbeatResponse(requestedOperations=operations)
 

@@ -76,3 +76,15 @@ trust boundary. Multiple opt-in IDs replace the single-target restriction. C2 re
 outbound from the agent. Sensitive values and production enrollment require their own
 integration. [Catalog provenance](PROCESSOR_CATALOG.md) ·
 [Apache MiNiFi System Admin Guide](https://github.com/apache/nifi/blob/main/minifi/minifi-docs/src/main/markdown/System_Admin_Guide.md#config-file)
+
+## ADR-009 — Keep separate Java and C++ deployment contracts
+
+Accepted. Add native MiNiFi C++ 1.1.0 alongside Java 2.12.0. An operator selects the
+runtime for each flow revision. The control plane compares that selection and the
+artifact's release with the runtime reported by the target. The two compilers emit the
+JSON formats accepted by each agent. They share flow identity, storage and deployment
+tracking. The pinned C++ profile includes three processors tested with real flow traffic.
+Additional native processors need their own property and runtime verification.
+
+[Apache MiNiFi C++ C2 contract](https://github.com/apache/nifi-minifi-cpp/blob/1a4b84eb8b53eebcf7c92d83f6ae818f440e33ee/C2.md) ·
+[Apache MiNiFi Java System Admin Guide](https://github.com/apache/nifi/blob/main/minifi/minifi-docs/src/main/markdown/System_Admin_Guide.md#config-file)

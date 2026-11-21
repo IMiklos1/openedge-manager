@@ -5,6 +5,7 @@ import { chromium } from 'playwright-core'
 const base = process.env.OEM_BROWSER_URL ?? 'http://127.0.0.1:5173'
 const executablePath = process.env.OEM_CHROMIUM ?? '/usr/bin/chromium'
 const agentId = process.env.OEM_BROWSER_AGENT ?? 'oem-test-agent-01'
+const cppAgent = process.env.OEM_BROWSER_CPP_AGENT
 const secondAgent = process.env.OEM_BROWSER_SECOND_AGENT ?? agentId
 const browser = await chromium.launch({ executablePath })
 
@@ -137,6 +138,48 @@ try {
   await page.getByRole('row').filter({ hasText: flowName }).filter({ hasText: 'Version 1' }).waitFor()
   await input('Agent ID').fill(secondAgent)
   await page.getByRole('row').filter({ hasText: flowName }).filter({ hasText: 'Version 2' }).waitFor()
+  if (cppAgent) {
+    await button('Flow Manager').click()
+    await button('New flow').click()
+    await input('Flow runtime').selectOption('minifi-cpp')
+    await button('UpdateAttribute').waitFor()
+    assert.equal(await button('ConvertRecord').count(), 0)
+    const javaTarget = input('Target agent').locator(`option[value="${agentId}"]`)
+    assert.equal(await javaTarget.evaluate(option => option.disabled), true)
+    assert.match(await javaTarget.textContent(), /different runtime/)
+    await button('Load test flow').click()
+    await input('Flow name').fill(`Browser native ${randomUUID().slice(0, 8)}`)
+    await processor('GenerateFlowFile').click()
+    await input('Data Format').selectOption('Text')
+    await input('Unique FlowFiles').uncheck()
+    await input('Custom Text').fill('Browser native first')
+    await processor('LogAttribute').click()
+    await input('Log Payload').check()
+    await input('Maximum Payload Line Length').fill('36')
+    await button('Save draft').click()
+    await status('Draft saved (v1)')
+    await input('Target agent').selectOption(cppAgent)
+    const nativeFirst = await deploy('Publish and deploy')
+    assert.equal(nativeFirst.runtime, 'minifi-cpp')
+
+    await processor('GenerateFlowFile').click()
+    await input('Custom Text').fill('Browser native second')
+    await button('Save draft').click()
+    await status('Draft saved (v2)')
+    const nativeSecond = await deploy('Publish and deploy')
+    assert.equal(nativeSecond.agent_id, cppAgent)
+    assert.notEqual(nativeSecond.sha256, nativeFirst.sha256)
+    const record = await page.request.get(`/api/v1/flows/${nativeSecond.flow_id}`)
+    const native = (await record.json()).definition
+    assert.equal(native.runtime, 'minifi-cpp')
+    assert.equal(native.nodes[0].config['Custom Text'], 'Browser native second')
+    assert.equal(native.nodes[1].config['Maximum Payload Line Length'], 36)
+    await button('v1 Published').click()
+    assert.equal(await input('Flow runtime').inputValue(), 'minifi-cpp')
+    await processor('GenerateFlowFile').click()
+    assert.equal(await input('Custom Text').inputValue(), 'Browser native first')
+    console.log(`Browser passed: persisted and deployed both native revisions to ${cppAgent}.`)
+  }
   console.log(`Browser passed: showed an ineligible inventory agent, published and deployed v1, persisted controller services, and applied v2 (targets: ${agentId}, ${secondAgent}).`)
 } finally {
   await browser.close()
