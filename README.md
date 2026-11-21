@@ -174,8 +174,14 @@ $env:MINIFI_FLOW_AGENT_IDS = "oem-test-agent-cpp"
 $env:OEM_CPP_C2_ORIGIN = "http://c2-observer:8001"
 $env:OEM_API_PORT = "0"
 $env:OEM_UI_PORT = "0"
-docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -p $project --profile smoke up --build --exit-code-from smoke
-docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -p $project --profile smoke down
+try {
+    docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -p $project --profile smoke up --build --exit-code-from smoke
+    if ($LASTEXITCODE -ne 0) { throw "Mixed smoke tests failed ($LASTEXITCODE)." }
+} finally {
+    docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -p $project --profile smoke down
+    Remove-Item Env:MINIFI_PROBE_AGENT_ID, Env:MINIFI_FLOW_AGENT_ID, Env:MINIFI_FLOW_AGENT_IDS
+    Remove-Item Env:OEM_CPP_C2_ORIGIN, Env:OEM_API_PORT, Env:OEM_UI_PORT
+}
 ```
 
 The suite verifies that both runtimes check in, then publishes and deploys different
