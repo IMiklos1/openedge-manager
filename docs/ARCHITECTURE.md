@@ -34,6 +34,12 @@ Java 2.12.0 raw-flow JSON model. PostgreSQL stores an immutable graph revision o
 and a separate immutable artifact on publication. The current flow row uses compare-and-swap
 versioning to prevent an editor from overwriting another editor's changes.
 
+Each revision selects Java or C++. Existing definitions without a runtime select Java.
+Migration `0004` labels existing artifacts as Java and persists the family alongside
+the release version for new artifacts. The C++ compiler emits the native 1.1.0 JSON
+flow schema accepted by AdaptiveConfiguration. Stable component IDs and queue settings
+use the same canonical model.
+
 ## Flow Manager
 
 The workspace loads existing graphs and immutable revisions, edits processors and queues
@@ -49,6 +55,8 @@ Compose supplies the built-in test targets if the operator has not configured an
 allowlist. The UI publishes the current saved revision before queueing when the operator
 chooses **Publish and deploy**. The same publication and deployment endpoints are used
 for both that action and the separate publish-then-deploy workflow.
+Changing **Flow runtime** loads a separate catalog and preserves any existing draft
+settings. Unsupported components or settings must be resolved before publication.
 
 ## Processor capability catalogue
 The generated catalog takes component classes, bundle coordinates, properties, input rules
@@ -56,6 +64,9 @@ and relationships from the stock image's NAR manifests. OEM verifies declared co
 against the exact runtime heartbeat before queueing or dispatching a deployment. The
 catalog lists 117 processors and 47 controller services. Device-side validators still
 govern valid values and external resources. [Catalog provenance and coverage](PROCESSOR_CATALOG.md)
+The C++ profile exposes the tested GenerateFlowFile, UpdateAttribute and LogAttribute
+processors with C++ property names. C++ controller services and relationship retry
+configuration are outside this profile.
 
 ## Outbound-only deployment
 
@@ -67,11 +78,12 @@ The backend tracks the artifact digest and per-deployment status.
 
 ## MiNiFi C2 boundary
 
-The adapter handles uncompressed JSON from the MiNiFi Java 2.12.0 HTTP C2 client.
+The adapter handles uncompressed JSON from MiNiFi Java 2.12.0 and MiNiFi C++ 1.1.0.
 `POST /c2-protocol/heartbeat` upserts agent identity and reported metadata in PostgreSQL,
-then returns a `requestedOperations` array. The Compose agent includes its runtime manifest
-in each heartbeat. The API persists only component identities from the manifest.
-Heartbeats that omit the manifest preserve the recorded version and component list.
+then returns a `requestedOperations` array. The Compose agents send their manifests in
+heartbeats. The API detects Java by `minifi-java` and native C++ by `cpp`, and persists
+component identities from the manifest. Heartbeats without the manifest preserve the
+recorded runtime, version and component list.
 
 To verify the return path, set `MINIFI_PROBE_AGENT_ID` to the test agent identifier. The API
 offers a read-only `DESCRIBE MANIFEST` operation with a persistent ID, then records the state
@@ -87,6 +99,9 @@ ACK and stored probe. The adapter also checks the reported agent ID when the ACK
 The Java `UPDATE CONFIGURATION` operation uses the raw JSON pattern from the Apache
 [System Admin Guide](https://github.com/apache/nifi/blob/main/minifi/minifi-docs/src/main/markdown/System_Admin_Guide.md#config-file)
 and the pinned [Java operation handler](https://github.com/apache/nifi/blob/19f4df8e048e91d87d3e4967c69b1298f9dbe450/c2/c2-client-bundle/c2-client-service/src/main/java/org/apache/nifi/c2/client/service/operation/UpdateConfigurationOperationHandler.java).
+The C++ adapter uses `location`, `persist` and `flowId`. Its flow base URL resolves the
+download path. Both formats are served over the same C2 download endpoint.
+[Pinned C++ configuration handler](https://github.com/apache/nifi-minifi-cpp/blob/1a4b84eb8b53eebcf7c92d83f6ae818f440e33ee/libminifi/src/c2/C2Agent.cpp)
 The read-only manifest probe remains available. Production enrollment, TLS, transfer,
 rollback, timeout recovery, and scale testing are future work. See the [API contract](API.md) and
 [runtime decision](DECISIONS.md#adr-007--retain-minifi-java-for-the-verified-integration).

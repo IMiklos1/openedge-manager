@@ -7,7 +7,7 @@ Management routes use `/api/v1` except for readiness at `/health`.
 | GET | `/health` (root) | API and database readiness |
 | GET | `/agents` | List agents by class or ID/hostname search with heartbeat freshness and deployment readiness |
 | GET | `/agent-classes` | List observed classes and recent check-in counts |
-| GET | `/catalog` | Bundled processor descriptors and legacy unbundled entries |
+| GET | `/catalog` | Processor descriptors for `runtime=minifi-java` (default) or `runtime=minifi-cpp` |
 | GET | `/flow-editor` | Queue settings, controller service descriptors and runtime version |
 | POST | `/agents/{id}/heartbeat` | OEM development heartbeat only |
 | POST | `/flows` | Create draft flow |
@@ -16,7 +16,7 @@ Management routes use `/api/v1` except for readiness at `/health`.
 | PUT | `/flows/{id}` | Save an updated graph as a revision using `expected_version` |
 | GET | `/flows/{id}/versions` | List saved revisions and published digests |
 | GET | `/flows/{id}/versions/{version}` | Read a specific revision |
-| POST | `/flows/{id}/publish` | Compile and publish an immutable Java artifact |
+| POST | `/flows/{id}/publish` | Compile and publish an immutable artifact for the revision's runtime |
 | POST | `/deployments` | Queue a published flow for one enabled agent |
 | GET | `/deployments/{id}` | Read deployment and acknowledgement status |
 | GET | `/deployments` | List history filtered by agent, flow, or state |
@@ -27,7 +27,7 @@ pagination, audit events, rate limits, request-size limits and versioned OpenAPI
 Suggested next endpoints: flow validate/version/diff, deployment cancel/targets, agent
 certificate rotation and diagnostics.
 
-## MiNiFi Java 2.12.0 C2
+## MiNiFi Java 2.12.0 and C++ 1.1.0 C2
 
 These development routes are at the API root. Both accept uncompressed JSON with
 `Content-Type: application/json` and a 4 MiB body limit. They return 415 for an unsupported
@@ -39,8 +39,10 @@ media type or encoding, 413 for an oversized body, and 422 for an invalid messag
 | POST | `/c2-protocol/acknowledge` | Requires `operationId` and `operationState.state`. If supplied, `agentInfo.identifier` must match the operation target. Records the first outcome and returns HTTP 204 with an empty body, including for an identical replay. An unknown operation or agent mismatch returns 404. A conflicting state returns 409. |
 
 A C2 configuration update uses `operation: "UPDATE"` and `operand: "CONFIGURATION"`.
-Its `identifier` is the deployment ID. The `args` object carries the artifact SHA-256
-as `flowId` and the relative download path as `relativeFlowUrl`. The agent initiates
+Its `identifier` is the deployment ID. For both clients, `flowId` is the artifact
+SHA-256. Java receives the relative path in `relativeFlowUrl`. C++ receives it in
+`location` along with `persist: "true"`, and resolves it relative to
+`nifi.c2.flow.base.url`. The agent initiates
 `GET /c2-protocol/configuration/{operation_id}` to download the dispatched JSON artifact.
 The response has an ETag containing its SHA-256 and `Cache-Control: no-store`.
 
@@ -53,7 +55,7 @@ receive one persistent operation with `identifier`, `operation: "DESCRIBE"`, and
 ## Test deployment lifecycle
 
 `POST /api/v1/flows/{id}/publish` returns the immutable artifact's flow version,
-`runtime_version`, and `sha256`. Repeating publication returns the existing artifact.
+`runtime`, `runtime_version`, and `sha256`. Repeating publication returns the existing artifact.
 Unsupported graphs and properties return 422 and leave the draft intact.
 
 `POST /api/v1/deployments` with `flow_id` and `agent_id` queues a published artifact for
@@ -61,8 +63,9 @@ an allowed agent. Compose allows its two test IDs when there are no explicit tar
 `MINIFI_FLOW_AGENT_IDS` and `MINIFI_FLOW_AGENT_ID` override those defaults when set.
 A disallowed target or execution policy returns 403. An incompatible runtime or missing
 manifest component, unpublished artifact, or overlapping active deployment returns 409.
-The first complete heartbeat supplies the processor and controller service coordinates
-required for compatibility checks. A class-only request keeps the
+The first complete heartbeat supplies the runtime and component coordinates required
+for compatibility checks. Queueing and dispatch match both the artifact runtime
+family and release. A class-only request keeps the
 legacy metadata-only behavior.
 
 The unfiltered inventory includes `can_deploy_flow` and a nullable `deployment_blocker`
@@ -81,6 +84,9 @@ recorded timestamp. The deployment status includes `ack_state`, `acknowledged_at
 
 
 ## Versioned workspace
+
+`definition.runtime` accepts `minifi-java` (default for existing flows) or
+`minifi-cpp`. `GET /flow-editor?runtime=...` lists the selected profile's editor settings.
 
 The canonical graph preserves processor `config`, `attributes`, `scheduling`, `description`,
 `position`, `auto_terminate` and `retry_relationships`. Null or absent

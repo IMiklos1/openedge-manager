@@ -5,7 +5,7 @@ import {
 } from '@xyflow/react'
 import { Boxes, GitBranch, Plus, Server, Workflow, Cpu, Cable, Layers3 } from 'lucide-react'
 import {
-  apiBase, apiRequest, sourceRelationships, type Agent, type Catalog, type ControllerService, type Definition, type Deployment, type Draft, type FlowEditor,
+  apiBase, apiRequest, runtimeLabels, sourceRelationships, type Runtime, type Agent, type Catalog, type ControllerService, type Definition, type Deployment, type Draft, type FlowEditor,
   type FlowConnection, type FlowSummary, type Processor, type PublishedFlow, type Revision, type StoredFlow,
 } from './api'
 import { ConnectionInspector, ProcessorInspector, ServiceInspector } from './Inspector'
@@ -46,7 +46,7 @@ function canvasEdge(connection: FlowConnection): GraphEdge {
 }
 
 const emptyFlow: Definition = {
-  schema_version: '1.0', flow_id: '', name: 'Untitled flow', description: null,
+  schema_version: '1.0', runtime: 'minifi-java', flow_id: '', name: 'Untitled flow', description: null,
   target_class: 'unassigned', nodes: [], connections: [], parameters: {},
 }
 const testFlow: Definition = {
@@ -80,8 +80,7 @@ export default function App() {
   const [saved, setSaved] = useState<{ draft: Draft; snapshot: string; digest?: string }>()
   const [readOnly, setReadOnly] = useState(false)
   const [selection, setSelection] = useState<Selection>()
-  const [catalog, setCatalog] = useState<Catalog>()
-  const [editor, setEditor] = useState<FlowEditor>()
+  const [profile, setProfile] = useState<{ runtime: Runtime; catalog: Catalog; editor: FlowEditor }>()
   const [serviceType, setServiceType] = useState('')
   const [wireSource, setWireSource] = useState('')
   const [wireTarget, setWireTarget] = useState('')
@@ -97,6 +96,10 @@ export default function App() {
   const [agentError, setAgentError] = useState(false)
   const [deploymentFilter, setDeploymentFilter] = useState('')
 
+  const runtime = metadata.runtime ?? 'minifi-java'
+  const catalog = profile?.runtime === runtime ? profile.catalog : undefined
+  const editor = profile?.runtime === runtime ? profile.editor : undefined
+  const hasAvailableServices = !!editor && Object.keys(editor.controller_services).length > 0
   const definition: Definition = {
     ...metadata,
     nodes: nodes.map(node => ({ ...node.data.processor, position: node.position })),
@@ -119,7 +122,7 @@ export default function App() {
   const errors = savedCurrent ? saved.draft.validation_errors : []
   const title = navItems.find(item => item.id === tab)?.title
   const canUseRevision = savedCurrent && (saved.digest || (!readOnly && errors.length === 0))
-  const canDeploy = !busy && !!canUseRevision && selectedAgent?.can_deploy_flow && !activeDeployment
+  const canDeploy = !busy && !!canUseRevision && selectedAgent?.can_deploy_flow && selectedAgent.runtime === runtime && !activeDeployment
   const deployLabel = savedCurrent && !saved.digest && !readOnly ? 'Publish and deploy' : 'Deploy flow'
 
   function relationshipsOf(id: string) {
@@ -143,10 +146,15 @@ export default function App() {
 
   useEffect(() => {
     let current = true
-    Promise.all([apiRequest<Catalog>('/catalog'), apiRequest<FlowEditor>('/flow-editor')])
-      .then(([options, editor]) => {
-        if (current) { setCatalog(options); setEditor(editor) }
-      }).catch(error => { if (current) setCatalogError(error.message) })
+    setCatalogError('')
+    Promise.all([apiRequest<Catalog>(`/catalog?runtime=${runtime}`), apiRequest<FlowEditor>(`/flow-editor?runtime=${runtime}`)])
+      .then(([catalog, editor]) => { if (current) setProfile({ runtime, catalog, editor }) })
+      .catch(error => { if (current) setCatalogError(error.message) })
+    return () => { current = false }
+  }, [runtime])
+
+  useEffect(() => {
+    let current = true
     const refresh = () => apiRequest<Agent[]>('/agents').then(rows => {
       if (current) { setAgents(rows); setAgentError(false) }
     }).catch(() => { if (current) setAgentError(true) })
@@ -245,6 +253,11 @@ export default function App() {
     return result
   }
 
+  const removeService = (id: string) => {
+    setMetadata(current => ({ ...current, controller_services: current.controller_services?.filter(item => item.id !== id) }))
+    setSelection(undefined)
+  }
+
   const addService = () => {
     if (!serviceType) return
     const next: ControllerService = { id: crypto.randomUUID(), type: serviceType, config: {} }
@@ -287,7 +300,7 @@ export default function App() {
   const publishFlow = () => run(async () => {
     if (!savedCurrent || readOnly) return
     const artifact = await publishRevision(saved)
-    setStatus(`Published v${artifact.version} for MiNiFi Java ${artifact.runtime_version}.`)
+    setStatus(`Published v${artifact.version} for ${runtimeLabels[artifact.runtime]} ${artifact.runtime_version}.`)
   })
 
   const deployFlow = () => run(async () => {
@@ -309,12 +322,12 @@ export default function App() {
       <a className="api-link" href={`${apiBase}/docs`} target="_blank" rel="noreferrer">API docs</a>
     </header>
     <main>
-      <div className="page-heading"><h1>{title}</h1>{tab === 'designer' && <span className="runtime">MiNiFi Java</span>}</div>
+      <div className="page-heading"><h1>{title}</h1>{tab === 'designer' && <span className="runtime">{runtimeLabels[runtime]}</span>}</div>
       {tab === 'designer' && <div className="workspace">
         <aside className="library" aria-label="Flow library">
           <div className="library-heading"><Layers3 size={16}/><h2>Flows</h2><button className="icon-button" aria-label="New flow"
-            disabled={busy} onClick={() => replace(emptyFlow)}><Plus size={17}/></button></div>
-          <button className="template-button" disabled={busy} onClick={() => replace(testFlow)}>Load test flow</button>
+            disabled={busy} onClick={() => replace({ ...emptyFlow, runtime })}><Plus size={17}/></button></div>
+          <button className="template-button" disabled={busy} onClick={() => replace({ ...testFlow, runtime })}>Load test flow</button>
           <div className="flow-list">
             {!flows ? <p className="muted">Loading flows…</p> : !flows.length ? <p className="muted">No saved flows.</p>
               : flows.map(flow => <button className={saved?.draft.id === flow.id ? 'current-flow' : ''} key={flow.id}
@@ -335,16 +348,29 @@ export default function App() {
           <div className="editor-bar">
             <label className="input-field flow-name">Flow name<input value={metadata.name} maxLength={255} disabled={readOnly}
               onChange={event => setMetadata({ ...metadata, name: event.target.value })}/></label>
+            <label className="input-field">Flow runtime<select aria-label="Flow runtime" value={runtime} disabled={busy || readOnly}
+              onChange={event => {
+                const next = event.target.value as Runtime
+                setMetadata(current => ({ ...current, runtime: next }))
+                setCatalogQuery('')
+                setAgentId('')
+                setSelection(undefined)
+                setServiceType('')
+                setStatus('')
+              }}>
+              {Object.entries(runtimeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select></label>
             <button onClick={saveDraft} disabled={readOnly || busy || !metadata.name.trim() || !dirty}>Save draft</button>
             <button onClick={publishFlow} disabled={readOnly || busy || !savedCurrent || !!saved?.digest || errors.length > 0}>Publish flow</button>
             <label className="input-field">Target agent<select aria-label="Target agent" value={agentId} disabled={busy}
               onChange={event => setAgentId(event.target.value)}>
               <option value="">{agentError ? 'Agent lookup failed' : !agents ? 'Loading agents…'
                 : !agents.length ? 'No agents have checked in'
-                  : agents.some(agent => agent.can_deploy_flow) ? 'Select an agent' : 'No deployment-ready agents'}</option>
-              {agents?.map(agent => <option key={agent.id} value={agent.id} disabled={!agent.can_deploy_flow}>
-                {agent.id}{agent.deployment_blocker ? ` (${targetBlockers[agent.deployment_blocker]})`
-                  : agent.health === 'STALE' ? ' (stale)' : ''}
+                  : agents.some(agent => agent.can_deploy_flow && agent.runtime === runtime) ? 'Select an agent' : 'No deployment-ready agents'}</option>
+              {agents?.map(agent => <option key={agent.id} value={agent.id} disabled={!agent.can_deploy_flow || agent.runtime !== runtime}>
+                {agent.id}{agent.runtime ? ` · ${runtimeLabels[agent.runtime as Runtime] ?? agent.runtime}` : ''}
+                {agent.deployment_blocker ? ` (${targetBlockers[agent.deployment_blocker]})`
+                  : agent.runtime !== runtime ? ' (different runtime)' : agent.health === 'STALE' ? ' (stale)' : ''}
               </option>)}
             </select></label>
             <button className="primary" onClick={deployFlow} disabled={!canDeploy}>{deployLabel}</button>
@@ -394,13 +420,13 @@ export default function App() {
                     <button disabled={!wireSource || !wireTarget || wireSource === wireTarget} onClick={() =>
                       onConnect({ source: wireSource, target: wireTarget })}>Add connection</button>
                   </div>}
-                  {editor && <div className="add-connection">
-                    <select aria-label="Controller service type" value={serviceType} disabled={readOnly || busy}
+                  {(hasAvailableServices || !!serviceOptions.length) && <div className="add-connection">
+                    {hasAvailableServices && editor && <><select aria-label="Controller service type" value={serviceType} disabled={readOnly || busy}
                       onChange={event => setServiceType(event.target.value)}>
                       <option value="">Controller service type</option>
                       {Object.keys(editor.controller_services).map(kind => <option key={kind}>{kind}</option>)}
                     </select>
-                    <button onClick={addService} disabled={readOnly || busy || !serviceType}>Add service</button>
+                    <button onClick={addService} disabled={readOnly || busy || !serviceType}>Add service</button></>}
                     {!!serviceOptions.length && <select aria-label="Inspect controller service"
                       value={service?.id ?? ''} onChange={event => setSelection(event.target.value
                         ? { kind: 'service', id: event.target.value } : undefined)}>
@@ -444,11 +470,14 @@ export default function App() {
                   || error.startsWith(`Controller service ${service.id},`))}
                 change={next => setMetadata(current => ({ ...current, controller_services: current.controller_services?.map(item =>
                   item.id === next.id ? next : item) }))}
-                remove={() => {
-                  setMetadata(current => ({ ...current, controller_services: current.controller_services?.filter(item =>
-                    item.id !== service.id) }))
-                  setSelection(undefined)
-                }}/>
+                remove={() => removeService(service.id)}/>
+              : service && editor ? <aside className="inspector">
+                  <div className="inspector-title"><h2>{service.label || service.type}</h2></div>
+                  <div className="inspector-content">
+                    <p>This controller service is unavailable in the selected runtime.</p>
+                    <button disabled={readOnly} onClick={() => removeService(service.id)}>Remove service</button>
+                  </div>
+                </aside>
                 : <aside className="inspector">
                   <div className="inspector-title"><h2>Flow settings</h2></div>
                   <div className="inspector-content">

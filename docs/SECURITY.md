@@ -11,12 +11,12 @@ supply just the operation ID. The optional probe issues only a read-only manifes
 inventory fields and the ACK state.
 
 The API has no allowed targets by default when run outside the development Compose
-stack. Compose permits its two disposable test IDs if there are no explicit IDs.
+stack. Compose permits its bundled Java and C++ test IDs if there are no explicit IDs.
 Set `MINIFI_ENABLE_COMPOSE_TEST_TARGETS=false` to turn off those defaults, or set
 explicit target IDs using `MINIFI_FLOW_AGENT_IDS` or the legacy singular setting.
 Inventory membership alone grants no deployment permission. Reported manifest components
 are checked for compatibility and the IDs constrain delivery in the local stack.
-These checks use claims from the agent. Production deployment requires authenticated
+Runtime and manifest checks use claims from the agent. Production deployment requires authenticated
 enrollment, scoped artifact access, mTLS and authenticated management operations.
 
 The downloadable artifact can authorize filesystem access and interaction with services
