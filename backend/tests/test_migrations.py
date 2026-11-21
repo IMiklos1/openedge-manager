@@ -24,10 +24,28 @@ class MigrationsTest(unittest.TestCase):
         upgrade_schema(database)
         upgrade_schema(database)
         with database.connect() as db:
-            self.assertEqual(db.scalar(text("SELECT version_num FROM alembic_version")), "0003")
+            self.assertEqual(db.scalar(text("SELECT version_num FROM alembic_version")), "0004")
             self.assertEqual(db.execute(text("SELECT id, status FROM flows")).one(), ("legacy", "PUBLISHED"))
             self.assertEqual(db.execute(text("SELECT id, agent_id, status FROM deployments")).one(),
                              ("legacy-deployment", None, "PENDING"))
             self.assertEqual(db.scalar(text("SELECT count(*) FROM flow_artifacts")), 0)
             self.assertEqual(db.execute(text("SELECT flow_id, version, name FROM flow_revisions")).one(),
                              ("legacy", 1, "Legacy flow"))
+
+    def test_published_artifact_retains_java_runtime_after_upgrade(self):
+        database = create_engine("sqlite://")
+        self.addCleanup(database.dispose)
+        upgrade_schema(database, "0003")
+        with database.begin() as db:
+            db.execute(text(
+                "INSERT INTO flows (id, name, current_version, definition, status, created_at) "
+                "VALUES ('java', 'Legacy Java flow', 1, '{}', 'PUBLISHED', CURRENT_TIMESTAMP)"
+            ))
+            db.execute(text(
+                "INSERT INTO flow_artifacts (flow_id, version, runtime_version, sha256, content) "
+                "VALUES ('java', 1, '2.12.0', 'digest', '{}')"
+            ))
+        upgrade_schema(database)
+        with database.connect() as db:
+            self.assertEqual(db.execute(text("SELECT runtime, runtime_version, sha256 FROM flow_artifacts")).one(),
+                             ("minifi-java", "2.12.0", "digest"))

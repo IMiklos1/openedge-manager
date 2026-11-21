@@ -122,12 +122,15 @@ class RealAgentC2Test(unittest.TestCase):
         while time.monotonic() < deadline:
             observations = get_json(OBSERVER)
             for index, event in enumerate(observations):
-                if event["kind"] != "acknowledgement":
+                if event["kind"] != "acknowledgement" or event["agent_id"] != AGENT_ID:
                     continue
                 # The next heartbeat also proves the backend stopped offering the operation.
-                followup = next((entry for entry in observations[index + 1:] if entry["kind"] == "heartbeat"), None)
+                followup = next((entry for entry in observations[index + 1:] if entry["kind"] == "heartbeat" and entry["identity"]["id"] == AGENT_ID), None)
                 if followup is not None:
-                    cls.delivery = next((entry for entry in observations[:index] if entry["kind"] == "heartbeat"), None)
+                    cls.delivery = next((entry for entry in observations[:index]
+                                         if entry["kind"] == "heartbeat"
+                                         and any(operation["identifier"] == event["operation_id"]
+                                                 for operation in entry["operations"])), None)
                     cls.ack = event
                     cls.followup = followup
                     return

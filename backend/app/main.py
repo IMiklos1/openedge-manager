@@ -1,15 +1,18 @@
+from typing import Literal
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from fastapi import FastAPI, Depends, HTTPException, Query
-from sqlalchemy import and_, case, func, select, text, update
+from sqlalchemy import and_, case, func, select, text, tuple_, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from .db import get_db
 from .models import Agent, Flow, Deployment, FlowArtifact, FlowRevision
 from .schemas import AgentHeartbeat, FlowCreate, FlowEdit, DeploymentCreate
-from .catalog import MINIFI_VERSION, UNBUNDLED
-from .compiler import CompileError, compile_minifi_java_json, runtime_validation
+from .catalog import UNBUNDLED
+from .cpp_processors import CPP_PROCESSORS
+from .runtimes import CPP, JAVA, VERSIONS
+from .compiler import CompileError, compile_flow, runtime_validation
 from .config import settings
 from .delivery import (
     ACTIVE, MANIFEST_COMPONENTS, artifact_components, artifact_for,
@@ -39,7 +42,12 @@ def health(db: Session = Depends(get_db)):
     return {"status": "ok", "service": "openedge-manager-api"}
 
 @app.get("/api/v1/catalog")
-def catalog():
+def catalog(runtime: Literal["minifi-java", "minifi-cpp"] = JAVA):
+    if runtime == CPP:
+        return {
+            kind: {"category": schema["bundle"]["artifact"], "runtime": [CPP], "status": "SUPPORTED", "configuration": schema}
+            for kind, schema in CPP_PROCESSORS.items()
+        }
     return {
         kind: {
             "category": schema["bundle"]["artifact"], "runtime": ["minifi-java"],
@@ -54,8 +62,9 @@ def catalog():
 
 
 @app.get("/api/v1/flow-editor")
-def flow_editor():
-    return {"queue": QUEUE_FIELDS, "runtime_version": MINIFI_VERSION, "controller_services": SERVICE_SCHEMAS}
+def flow_editor(runtime: Literal["minifi-java", "minifi-cpp"] = JAVA):
+    return {"queue": QUEUE_FIELDS, "runtime_version": VERSIONS[runtime],
+            "controller_services": SERVICE_SCHEMAS if runtime == JAVA else {}}
 
 def agent_health(last_seen: datetime | None, recent: datetime) -> str:
     if last_seen is None:
@@ -79,7 +88,7 @@ def list_agents(
         query = query.where(Agent.agent_class == agent_class)
     if deployable:
         query = query.where(Agent.id.in_(settings.flow_agent_ids),
-                            Agent.runtime == "minifi-java", Agent.runtime_version == MINIFI_VERSION,
+                            tuple_(Agent.runtime, Agent.runtime_version).in_(list(VERSIONS.items())),
                             Agent.capabilities[MANIFEST_COMPONENTS][0][0].as_string().is_not(None))
     if q:
         query = query.where(Agent.id.icontains(q, autoescape=True) | Agent.hostname.icontains(q, autoescape=True))
@@ -240,13 +249,14 @@ def publish_flow(flow_id: str, db: Session = Depends(get_db), version: int | Non
     artifact = db.get(FlowArtifact, (flow.id, flow.current_version))
     if artifact is None:
         try:
-            content = compile_minifi_java_json(flow.definition | {"flow_id": flow.id, "name": flow.name})
+            content = compile_flow(flow.definition | {"flow_id": flow.id, "name": flow.name})
         except CompileError as exc:
             raise HTTPException(422, str(exc)) from exc
         artifact = FlowArtifact(
             flow_id=flow.id,
             version=flow.current_version,
-            runtime_version=MINIFI_VERSION,
+            runtime=flow.definition.get("runtime", JAVA),
+            runtime_version=VERSIONS[flow.definition.get("runtime", JAVA)],
             sha256=sha256(content.encode()).hexdigest(),
             content=content,
         )
@@ -254,7 +264,7 @@ def publish_flow(flow_id: str, db: Session = Depends(get_db), version: int | Non
     flow.status = "PUBLISHED"
     db.commit()
     return {"id": flow.id, "version": flow.current_version, "status": flow.status,
-            "sha256": artifact.sha256, "runtime_version": artifact.runtime_version}
+            "sha256": artifact.sha256, "runtime": artifact.runtime, "runtime_version": artifact.runtime_version}
 
 
 def deployment_result(deployment: Deployment, artifact: FlowArtifact | None) -> dict:
@@ -266,6 +276,7 @@ def deployment_result(deployment: Deployment, artifact: FlowArtifact | None) -> 
         "agent_id": deployment.agent_id,
         "status": deployment.status,
         "sha256": artifact.sha256 if artifact else None,
+        "runtime": artifact.runtime if artifact else None,
         "ack_state": deployment.ack_state,
         "acknowledged_at": deployment.acknowledged_at,
         "applied_at": deployment.applied_at,
@@ -299,12 +310,14 @@ def create_deployment(payload: DeploymentCreate, db: Session = Depends(get_db)):
         raise HTTPException(404, "Agent has not checked in")
     blocker = deployment_blocker(agent)
     if blocker == "INCOMPATIBLE_RUNTIME":
-        raise HTTPException(409, f"Agent must report MiNiFi Java {MINIFI_VERSION}")
+        raise HTTPException(409, "Agent must report a supported MiNiFi runtime and version")
     if blocker == "AWAITING_MANIFEST":
         raise HTTPException(409, "Agent must send a full C2 manifest before deployment")
     artifact = artifact_for(db, deployment)
     if artifact is None:
         raise HTTPException(409, "Publish a compiled flow artifact before deployment")
+    if (agent.runtime, agent.runtime_version) != (artifact.runtime, artifact.runtime_version):
+        raise HTTPException(409, f"Flow requires {artifact.runtime} {artifact.runtime_version}")
     components = artifact_components(artifact)
     if not permits_execution(components):
         raise HTTPException(403, "The target is not enabled for command execution processors")

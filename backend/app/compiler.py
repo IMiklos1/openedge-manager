@@ -4,6 +4,8 @@ from graphlib import CycleError, TopologicalSorter
 from uuid import NAMESPACE_URL, uuid5
 
 from .catalog import CONTROLLER_SERVICES, PROCESSORS
+from .cpp_processors import CPP_PROCESSORS, resolve_cpp_processor
+from .runtimes import CPP, JAVA
 from .processor_properties import (
     QUEUE_FIELDS, SERVICE_SCHEMAS, resolve_fields, resolve_processor, resolve_properties,
 )
@@ -65,16 +67,26 @@ def runtime_validation(definition: dict):
     if len({edge["id"] for edge in connections}) != len(connections):
         errors.append("Connection IDs must be unique.")
 
-    interfaces, service_config = configured_services(definition.get("controller_services", []), errors)
+    cpp = definition.get("runtime", JAVA) == CPP
+    catalog = CPP_PROCESSORS if cpp else PROCESSORS
+    services = definition.get("controller_services", [])
+    if cpp:
+        interfaces, service_config = {}, {}
+        if services:
+            errors.append("Controller services are unavailable in the C++ editor profile.")
+    else:
+        interfaces, service_config = configured_services(services, errors)
     configurations = {}
     for node in nodes:
         for field in sorted(node.keys() - NODE_FIELDS):
             errors.append(f"Node {node['id']}, {field}: unknown processor field.")
-        if node["type"] not in PROCESSORS:
+        if node["type"] not in catalog:
             errors.append(f"Node {node['id']}: {node['type']} is unavailable in the pinned image.")
             continue
-        configurations[node["id"]] = resolve_processor(node, interfaces, errors)
-    if configurations and not any(schedule["state"] == "RUNNING" for _, schedule, _ in configurations.values()):
+        configurations[node["id"]] = (
+            resolve_cpp_processor(node, errors) if cpp else resolve_processor(node, interfaces, errors)
+        )
+    if configurations and not any(schedule.get("state", "RUNNING") == "RUNNING" for _, schedule, _ in configurations.values()):
         errors.append("Keep at least one processor enabled for C2 application confirmation.")
 
     incoming = Counter(edge["target"] for edge in connections)
@@ -94,10 +106,10 @@ def runtime_validation(definition: dict):
     relationship_settings = {}
     for node in nodes:
         node_id = node["id"]
-        if node["type"] not in PROCESSORS or node_id not in configurations:
+        if node["type"] not in catalog or node_id not in configurations:
             continue
         _, schedule, available = configurations[node_id]
-        requirement = PROCESSORS[node["type"]].get("inputRequirement")
+        requirement = catalog[node["type"]].get("inputRequirement")
         scope = f"Node {node_id}"
         if requirement == "INPUT_REQUIRED" and not incoming[node_id]:
             errors.append(f"{scope}: this processor needs an incoming connection.")
@@ -119,9 +131,11 @@ def runtime_validation(definition: dict):
             if missing := available - connected - terminated:
                 errors.append(f"{scope}: connect or terminate {', '.join(sorted(missing))}.")
         retry = set(node.get("retry_relationships", []))
-        if schedule["retry_success"]:
+        if schedule.get("retry_success"):
             retry.add("success")
-        if retry and not schedule["retry_count"]:
+        if retry and cpp:
+            errors.append(f"{scope}: relationship retry is unavailable in the C++ editor profile.")
+        elif retry and not schedule["retry_count"]:
             errors.append(f"{scope}: retry requires a positive retry count.")
         if invalid := retry - available:
             errors.append(f"{scope}: unknown retry relationships: {', '.join(sorted(invalid))}.")
@@ -143,6 +157,57 @@ def versioned_properties(flow_id, component, values):
             "sensitive": False, "identifiesControllerService": service_reference,
         }
     return {"properties": props, "propertyDescriptors": descriptors}
+
+
+def compile_flow(definition: dict) -> str:
+    if definition.get("runtime", JAVA) == CPP:
+        return compile_minifi_cpp_json(definition)
+    return compile_minifi_java_json(definition)
+
+
+def compile_minifi_cpp_json(definition: dict) -> str:
+    errors, configurations, queues, _, relationships = runtime_validation(definition)
+    if errors:
+        raise CompileError("; ".join(errors))
+    flow_id = definition["flow_id"]
+    processors = []
+    for node in definition["nodes"]:
+        node_id, kind = node["id"], node["type"]
+        properties, schedule, _ = configurations[node_id]
+        processors.append({
+            "identifier": component_id(flow_id, "processor", node_id),
+            "name": node.get("label") or kind,
+            "type": CPP_PROCESSORS[kind]["type"],
+            "bundle": CPP_PROCESSORS[kind]["bundle"],
+            "properties": properties,
+            "schedulingStrategy": "TIMER_DRIVEN",
+            "schedulingPeriod": schedule["period"],
+            "concurrentlySchedulableTaskCount": schedule["tasks"],
+            "penaltyDuration": schedule["penalty"],
+            "yieldDuration": schedule["yield"],
+            "autoTerminatedRelationships": relationships[node_id][0],
+        })
+
+    connections = []
+    for edge in definition["connections"]:
+        queue = queues[edge["id"]]
+        connections.append({
+            "identifier": component_id(flow_id, "connection", edge["id"]),
+            "name": edge.get("label") or edge["id"],
+            "source": {"id": component_id(flow_id, "processor", edge["source"])},
+            "destination": {"id": component_id(flow_id, "processor", edge["target"])},
+            "selectedRelationships": [edge.get("source_relationship", "success")],
+            "backPressureObjectThreshold": queue["object_threshold"],
+            "backPressureDataSizeThreshold": queue["data_size_threshold"],
+            "flowFileExpiration": queue["expiration"],
+        })
+
+    return json.dumps({"rootGroup": {
+        "identifier": component_id(flow_id, "root"),
+        "name": definition["name"],
+        "processors": processors,
+        "connections": connections,
+    }}, sort_keys=True, separators=(",", ":"))
 
 
 def compile_minifi_java_json(definition: dict) -> str:

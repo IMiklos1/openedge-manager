@@ -21,7 +21,7 @@ class Settings(BaseSettings):
         explicit = frozenset((ids | {self.minifi_flow_agent_id.strip()}) - {""})
         if explicit or not self.minifi_enable_compose_test_targets:
             return explicit
-        return frozenset({"oem-test-agent-01", "oem-test-agent-02"})
+        return frozenset({"oem-test-agent-01", "oem-test-agent-02", "oem-test-agent-cpp"})
 
     def database_connection(self) -> str | URL:
         if self.database_url:

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .catalog import MINIFI_VERSION
+from .runtimes import CPP, VERSIONS
 from .config import settings
 from .models import Agent, Deployment, FlowArtifact
 
@@ -25,11 +25,17 @@ class ConfigurationArguments(BaseModel):
     relativeFlowUrl: str
 
 
+class CppConfigurationArguments(BaseModel):
+    flowId: str
+    location: str
+    persist: str = "true"
+
+
 class UpdateConfiguration(BaseModel):
     identifier: str
     operation: str = "UPDATE"
     operand: str = "CONFIGURATION"
-    args: ConfigurationArguments
+    args: ConfigurationArguments | CppConfigurationArguments
 
 
 def artifact_for(db: Session, deployment: Deployment) -> FlowArtifact:
@@ -56,7 +62,10 @@ def advertised_components(agent: Agent) -> set[tuple[str, ...]]:
 def deployment_blocker(agent: Agent) -> str | None:
     if agent.id not in settings.flow_agent_ids:
         return "NOT_ENABLED"
-    if agent.runtime != "minifi-java" or (agent.runtime_version and agent.runtime_version != MINIFI_VERSION):
+    if agent.runtime is None:
+        return "AWAITING_MANIFEST"
+    supported_version = VERSIONS.get(agent.runtime)
+    if not supported_version or (agent.runtime_version and agent.runtime_version != supported_version):
         return "INCOMPATIBLE_RUNTIME"
     if not agent.runtime_version or not advertised_components(agent):
         return "AWAITING_MANIFEST"
@@ -73,17 +82,19 @@ def missing_agent_components(agent: Agent, components: list[dict]) -> list[str]:
 
 
 def flow_update(
-    db: Session, agent_id: str, reported_flow_id: str | None, seen_at: datetime,
+    db: Session, agent: Agent, reported_flow_id: str | None, seen_at: datetime,
 ) -> UpdateConfiguration | None:
-    if agent_id not in settings.flow_agent_ids:
+    if deployment_blocker(agent) is not None:
         return None
     deployment = db.scalar(
-        select(Deployment).where(Deployment.agent_id == agent_id, Deployment.status.in_(ACTIVE)).with_for_update(),
+        select(Deployment).where(Deployment.agent_id == agent.id, Deployment.status.in_(ACTIVE)).with_for_update(),
     )
     if deployment is None:
         return None
 
     artifact = artifact_for(db, deployment)
+    if (agent.runtime, agent.runtime_version) != (artifact.runtime, artifact.runtime_version):
+        return None
     if deployment.status == "ACKNOWLEDGED":
         if reported_flow_id == artifact.sha256:
             deployment.status = "APPLIED"
@@ -91,16 +102,13 @@ def flow_update(
         return None
 
     components = artifact_components(artifact)
-    if not permits_execution(components) or missing_agent_components(db.get(Agent, agent_id), components):
+    if not permits_execution(components) or missing_agent_components(agent, components):
         return None
     deployment.status = "DISPATCHED"
-    return UpdateConfiguration(
-        identifier=deployment.id,
-        args=ConfigurationArguments(
-            flowId=artifact.sha256,
-            relativeFlowUrl=f"configuration/{deployment.id}",
-        ),
-    )
+    path = f"configuration/{deployment.id}"
+    args = (CppConfigurationArguments(flowId=artifact.sha256, location=path)
+            if artifact.runtime == CPP else ConfigurationArguments(flowId=artifact.sha256, relativeFlowUrl=path))
+    return UpdateConfiguration(identifier=deployment.id, args=args)
 
 
 def acknowledge_flow_update(
