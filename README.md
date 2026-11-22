@@ -12,7 +12,7 @@ docker compose --profile agent up -d --build
 Check logs:
 ```powershell
 docker compose --profile agent ps
-docker compose --profile agent logs -f minifi-agent-01
+docker compose --profile agent logs -f minifi-agent-01 minifi-cpp
 ```
 
 ## Start on Windows with PowerShell
@@ -31,11 +31,12 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/agents
 - [API documentation](http://127.0.0.1:8000/docs)
 - [API readiness](http://127.0.0.1:8000/health)
 
-The `agent` profile starts the official Apache MiNiFi Java 2.12.0 image pinned in
-[`compose.minifi.yaml`](compose.minifi.yaml). It registers as
-`oem-test-agent-01`, then checks in every five seconds without any published agent port.
-The default Compose configuration permits deployment to the bundled test agent IDs.
-The first full C2 heartbeat makes a checked-in test agent selectable in Flow Manager.
+The `agent` profile starts both pinned Apache MiNiFi images from
+[`compose.minifi.yaml`](compose.minifi.yaml): Java 2.12.0 as `oem-test-agent-01`
+and C++ 1.1.0 as `oem-test-agent-cpp`. Both use class `openedge-test` and send
+full, uncompressed C2 heartbeats to the local API every five seconds without publishing
+agent ports. The default Compose configuration permits deployment to both test agents.
+The first full C2 heartbeat makes a compatible agent selectable in Flow Manager.
 The C2 routes are documented in [the API specification](docs/API.md). Omit
 `--profile agent` if you only need the control plane.
 
@@ -85,15 +86,10 @@ read-only. Published revisions remain available for explicit redeployment. **Edg
 shows recent heartbeats and class activity. **Deployments** shows persisted outcomes and ACKs
 with an agent and status filter.
 
-## Run Java and C++ together
+## Deploy a C++ test flow
 
-Run this from the repository root in PowerShell or Bash to add the pinned MiNiFi C++
-1.1.0 agent to the development stack.
-
-```powershell
-docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml --profile agent --profile cpp up --build -d --wait
-Invoke-RestMethod http://127.0.0.1:8000/api/v1/agents
-```
+Start both agents with `docker compose --profile agent up -d --build`.
+To run the control plane with only the C++ agent, use `--profile cpp` instead.
 
 In **Flow Manager**, choose **MiNiFi C++** under **Flow runtime** and load the test
 flow. The C++ palette includes GenerateFlowFile, UpdateAttribute and LogAttribute with
@@ -107,11 +103,17 @@ The [C++ starter script](agents/minifi-cpp/start.sh) shows the native
 reachable C2 origin, and a matching pinned runtime and manifest. Java uses its
 `bootstrap.conf` settings described below.
 
-To stop the mixed stack and retain named volumes:
+If native Windows MiNiFi C++ 1.1.0 sends an invalid UTF-8 hostname and receives a
+C2 HTTP 422, create `conf\minifi.properties.d\99-oem-c2.properties` with the following
+setting and restart the agent:
 
-```bash
-docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml --profile agent --profile cpp down
+```properties
+nifi.c2.root.classes=AgentInformation,FlowInformation,AssetInformation
 ```
+
+This workaround omits device metadata (including hostname, OS, and architecture)
+but keeps agent identity, manifest, and flow reporting. Keep `nifi.c2.full.heartbeat=true`
+so OEM can detect the runtime and components.
 
 ## Run the automated smoke tests
 

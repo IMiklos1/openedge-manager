@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from typing import Annotated, Literal, TypeVar
 from uuid import uuid4
@@ -19,6 +20,7 @@ from .delivery import (
 )
 
 router = APIRouter(prefix="/c2-protocol", tags=["MiNiFi C2"])
+logger = logging.getLogger(__name__)
 MAX_BODY_BYTES = 4 * 1024 * 1024
 AgentId = Annotated[str, StringConstraints(min_length=1, max_length=128, pattern=r"^[^\x00-\x20\x7f]+$")]
 RuntimeVersion = Annotated[str, StringConstraints(max_length=100, pattern=r"^[^\x00]*$")]
@@ -128,6 +130,14 @@ def parse_c2_message(model: type[Message], body: bytearray) -> Message:
     try:
         return model.model_validate_json(body)
     except ValidationError as exc:
+        error = exc.errors(include_input=False, include_context=False, include_url=False)[0]
+        field = ".".join(map(str, error["loc"])) or "<body>"
+        logger.warning("Invalid C2 %s: field=%s type=%s", model.__name__, field, error["type"])
+        if error["type"] == "json_invalid":
+            try:
+                body.decode("utf-8")
+            except UnicodeDecodeError as encoding_error:
+                logger.warning("Invalid C2 UTF-8 at byte %d", encoding_error.start)
         raise HTTPException(422, "Invalid C2 message") from exc
 
 

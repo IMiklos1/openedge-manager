@@ -24,6 +24,9 @@ jobs:
         run: |
           docker compose config --quiet
           docker compose --profile agent config --quiet
+          agent_services=$(docker compose --profile agent config --services)
+          grep -Fx minifi-agent-01 <<< "$agent_services"
+          grep -Fx minifi-cpp <<< "$agent_services"
           docker compose --profile smoke config --quiet
           docker compose --profile agent --profile fleet config --quiet
           docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml --profile agent --profile cpp config --quiet

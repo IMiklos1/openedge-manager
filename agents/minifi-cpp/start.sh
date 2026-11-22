@@ -9,7 +9,7 @@ sed -i -E '/^nifi\.c2\.(enable|agent\.(identifier|class|heartbeat\.period)|full\
 cat >> conf/minifi.properties <<EOF
 nifi.c2.enable=true
 nifi.c2.agent.identifier=${OEM_CPP_AGENT_ID}
-nifi.c2.agent.class=openedge-cpp-test
+nifi.c2.agent.class=openedge-test
 nifi.c2.agent.heartbeat.period=5 sec
 nifi.c2.full.heartbeat=true
 nifi.c2.rest.request.encoding=none
