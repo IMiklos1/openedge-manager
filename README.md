@@ -5,8 +5,13 @@ React Flow designer and outbound Apache MiNiFi Java and C++ C2.
 
 ## Quick start from my VS Code
 
+### Without NiFI
 ```powershell
 docker compose --profile agent up -d --build
+```
+### With NiFi
+```powershell
+docker compose -f docker-compose.yml -f compose.nifi.yaml --profile agent up -d --build
 ```
 
 Check logs:
