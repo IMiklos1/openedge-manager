@@ -5,10 +5,11 @@ import {
 } from '@xyflow/react'
 import { Boxes, GitBranch, Plus, Server, Workflow, Cpu, Cable, Layers3 } from 'lucide-react'
 import {
-  apiBase, apiRequest, runtimeLabels, sourceRelationships, type Runtime, type Agent, type Catalog, type ControllerService, type Definition, type Deployment, type Draft, type FlowEditor,
+  apiBase, apiRequest, remoteProcessGroup, runtimeLabels, sourceRelationships, type Runtime, type Agent, type Catalog, type ControllerService, type Definition, type Deployment, type Draft, type FlowEditor,
   type FlowConnection, type FlowSummary, type Processor, type PublishedFlow, type Revision, type StoredFlow,
 } from './api'
 import { ConnectionInspector, ProcessorInspector, ServiceInspector } from './Inspector'
+import { RemoteGroupInspector } from './RemoteGroupInspector'
 import { AgentInventory, DeploymentInventory, Pagination, pageSize } from './Inventory'
 
 type GraphNode = Node<{ processor: Processor; inputForbidden?: boolean }, 'processor'>
@@ -17,12 +18,13 @@ type Selection = { kind: 'node' | 'edge' | 'service'; id: string }
 
 function ProcessorCard({ data, selected }: NodeProps<GraphNode>) {
   const { processor } = data
+  const remote = processor.type === remoteProcessGroup
   return <div className={`processor-card ${selected ? 'selected' : ''}`}>
     {!data.inputForbidden && processor.type !== 'GenerateFlowFile' && <Handle position={Position.Left} type="target"/>}
-    <div className="processor-icon"><Cpu size={18}/></div>
+    <div className="processor-icon">{remote ? <Server size={18}/> : <Cpu size={18}/>}</div>
     <div><strong>{processor.label || processor.type}</strong>
-      <small>{processor.scheduling?.state === 'DISABLED' ? 'Disabled' : processor.type}</small></div>
-    <Handle position={Position.Right} type="source"/>
+      <small>{remote ? 'NiFi Site-to-Site' : processor.scheduling?.state === 'DISABLED' ? 'Disabled' : processor.type}</small></div>
+    {!remote && <Handle position={Position.Right} type="source"/>}
   </div>
 }
 
@@ -267,10 +269,14 @@ export default function App() {
   }
 
   const addProcessor = (type: string) => {
-    const processor: Processor = { id: crypto.randomUUID(), type, config: {} }
+    const processor: Processor = { id: crypto.randomUUID(), type, config: {},
+      ...(type === remoteProcessGroup ? { label: 'Remote Process Group' } : {}) }
     setNodes(current => [...current, graphNode(processor, current.length)])
     setSelection({ kind: 'node', id: processor.id })
   }
+
+  const updateProcessor = (processor: Processor) => setNodes(current => current.map(item => item.id === processor.id
+    ? { ...item, ariaLabel: `Configure ${processor.label || processor.type}`, data: { ...item.data, processor } } : item))
 
   const saveDraft = () => run(async () => {
     const id = saved?.draft.id ?? crypto.randomUUID()
@@ -398,6 +404,8 @@ export default function App() {
                   </select>}
                 </div>
                 <div className="palette-options">
+                  {['remote process group', 'site-to-site'].some(value => value.includes(catalogQuery.toLowerCase())) &&
+                    <button disabled={readOnly || busy} onClick={() => addProcessor(remoteProcessGroup)}>Remote Process Group</button>}
                   {catalogError && <p role="alert">{catalogError}</p>}
                   {!catalog && !catalogError && <span className="muted">Loading catalog…</span>}
                   {Object.entries(catalog ?? {}).filter(([kind, entry]) => [kind, ...(entry.configuration?.tags ?? [])]
@@ -410,7 +418,8 @@ export default function App() {
                   {nodes.length > 1 && !readOnly && <div className="add-connection">
                     <select aria-label="Connection source" value={wireSource} onChange={event => setWireSource(event.target.value)}>
                       <option value="">Choose source</option>
-                      {nodes.map(item => <option key={item.id} value={item.id}>{item.data.processor.label || item.data.processor.type}</option>)}
+                      {nodes.filter(item => item.data.processor.type !== remoteProcessGroup).map(item =>
+                        <option key={item.id} value={item.id}>{item.data.processor.label || item.data.processor.type}</option>)}
                     </select>
                     <select aria-label="Connection destination" value={wireTarget} onChange={event => setWireTarget(event.target.value)}>
                       <option value="">Choose destination</option>
@@ -448,14 +457,16 @@ export default function App() {
                 <span className="canvas-count"><Cable size={14}/>{nodes.length} processors · {edges.length} connections</span>
               </div>
             </div>
-            {node ? <ProcessorInspector key={node.id} node={node.data.processor}
+            {node?.data.processor.type === remoteProcessGroup ? <RemoteGroupInspector key={node.id}
+              node={node.data.processor} onChange={updateProcessor} disabled={readOnly}
+              errors={errors.filter(error => error.startsWith(`Node ${node.id}:`))}/>
+              : node ? <ProcessorInspector key={node.id} node={node.data.processor}
               schema={catalog?.[node.data.processor.type]?.configuration} disabled={readOnly}
               services={serviceOptions} relationships={relationshipsOf(node.id)}
               connected={edges.filter(item => item.source === node.id).map(item => item.data!.connection.source_relationship)}
               errors={errors.filter(error => error.startsWith(`Node ${node.id}`) &&
                 [',', ':'].includes(error[`Node ${node.id}`.length] ?? ''))}
-              change={processor => setNodes(current => current.map(item => item.id === node.id
-                ? { ...item, ariaLabel: `Configure ${processor.label || processor.type}`, data: { ...item.data, processor } } : item))}/>
+              change={updateProcessor}/>
               : edge ? <ConnectionInspector key={edge.id} connection={edge.data!.connection} queue={editor?.queue ?? {}}
                 relationships={relationshipsOf(edge.source)}
                 errors={errors.filter(error => error.startsWith(`Connection ${edge.id}:`) || error.startsWith(`Connection ${edge.id},`))}

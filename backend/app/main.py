@@ -12,13 +12,14 @@ from .schemas import AgentHeartbeat, FlowCreate, FlowEdit, DeploymentCreate
 from .catalog import UNBUNDLED
 from .cpp_processors import CPP_PROCESSORS
 from .runtimes import CPP, JAVA, VERSIONS
-from .compiler import CompileError, compile_flow, runtime_validation
+from .compiler import REMOTE_PROCESS_GROUP, CompileError, compile_flow, runtime_validation
 from .config import settings
 from .delivery import (
     ACTIVE, MANIFEST_COMPONENTS, artifact_components, artifact_for,
     deployment_blocker, missing_agent_components, permits_execution,
 )
 from .migrate import upgrade_schema
+from .nifi import InputPort, input_ports
 from .processor_properties import PROCESSOR_SCHEMAS, QUEUE_FIELDS, SERVICE_SCHEMAS, validate_secret_fields
 from .c2 import router as minifi_c2_router
 
@@ -134,6 +135,11 @@ def oem_dev_heartbeat(agent_id: str, payload: AgentHeartbeat, db: Session = Depe
     db.commit()
     return {"accepted": True, "agent_id": agent_id, "note": "OEM dev API, not MiNiFi C2"}
 
+@app.get("/api/v1/nifi/input-ports")
+def list_nifi_input_ports() -> list[InputPort]:
+    return input_ports()
+
+
 @app.get("/api/v1/flows")
 def list_flows(
     db: Session = Depends(get_db),
@@ -145,7 +151,7 @@ def list_flows(
 
 
 def flow_definition(payload: FlowCreate | FlowEdit, flow_id: str) -> dict:
-    definition = payload.definition.model_dump()
+    definition = payload.definition.model_dump(mode="json")
     if errors := validate_secret_fields(definition):
         raise HTTPException(422, errors)
     description = payload.description if payload.description is not None else definition["description"]
@@ -248,8 +254,11 @@ def publish_flow(flow_id: str, db: Session = Depends(get_db), version: int | Non
         raise HTTPException(409, "Flow changed. Reload the latest revision before publishing.")
     artifact = db.get(FlowArtifact, (flow.id, flow.current_version))
     if artifact is None:
+        definition = flow.definition | {"flow_id": flow.id, "name": flow.name}
+        groups = [node for node in definition["nodes"] if node["type"] == REMOTE_PROCESS_GROUP]
+        port_names = {str(port.id): port.name for port in input_ports()} if groups else {}
         try:
-            content = compile_flow(flow.definition | {"flow_id": flow.id, "name": flow.name})
+            content = compile_flow(definition, str(settings.oem_nifi_url) if groups else None, port_names)
         except CompileError as exc:
             raise HTTPException(422, str(exc)) from exc
         artifact = FlowArtifact(

@@ -1,6 +1,24 @@
 services:
   minifi-cpp:
-    profiles: [smoke]
+    profiles: [cpp, smoke]
+    image: apache/nifi-minifi-cpp:1.1.0@sha256:647d0548f8411aeb7fc58def0666077c25f950ba85cf5cc58d4d28500b58e0cd
+    hostname: oem-test-agent-cpp
+    init: true
+    command: ["sh", "/oem/start.sh"]
+    volumes:
+      - ./agents/minifi-cpp:/oem:ro
+    environment:
+      OEM_CPP_AGENT_ID: oem-test-agent-cpp
+      OEM_CPP_C2_ORIGIN: ${OEM_CPP_C2_ORIGIN:-http://api:8000}
+      NO_PROXY: api,c2-observer,nifi
+      no_proxy: api,c2-observer,nifi
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "pidof", "minifi"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   smoke:
     environment:

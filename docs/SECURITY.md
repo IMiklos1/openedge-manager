@@ -26,6 +26,12 @@ deploy. This limits those two types and other component behavior still depends o
 deployment environment and properties. Sensitive descriptor values are rejected before
 draft persistence. Parameter contexts and remote secret distribution are pending.
 
+The optional NiFi overlay uses unauthenticated HTTP and publishes its UI and API on
+host loopback. Use it in a trusted local Compose network. The backend connects only
+to its server-configured NiFi origin and does not follow redirects. The browser selects a port
+UUID from that server's live catalog. Production Site-to-Site needs authenticated TLS
+and authorized port access.
+
 Before production, implement the following.
 1. TLS reverse proxy; no public plaintext endpoints.
 2. Unique client certificate or cryptographic identity per agent.

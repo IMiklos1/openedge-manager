@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { chromium } from 'playwright-core'
 
 const base = process.env.OEM_BROWSER_URL ?? 'http://127.0.0.1:5173'
@@ -179,6 +179,42 @@ try {
     await processor('GenerateFlowFile').click()
     assert.equal(await input('Custom Text').inputValue(), 'Browser native first')
     console.log(`Browser passed: persisted and deployed both native revisions to ${cppAgent}.`)
+  }
+  const nifiPort = process.env.OEM_BROWSER_NIFI_PORT
+  if (nifiPort) {
+    await button('Flow Manager').click()
+    for (const [runtime, agent] of [['minifi-java', agentId], ['minifi-cpp', cppAgent]]) {
+      if (!agent) continue
+      await button('New flow').click()
+      await input('Flow runtime').selectOption(runtime)
+      await input('Processor palette').fill('GenerateFlowFile')
+      await button('GenerateFlowFile').click()
+      const data = `Browser Site-to-Site ${runtime} ${randomUUID()}`
+      await input('Flow name').fill(`Browser Site-to-Site ${runtime}`)
+      await input('Data Format').selectOption('Text')
+      await input('Unique FlowFiles').uncheck()
+      await input('Custom Text').fill(data)
+      await input('Processor palette').fill('Remote Process Group')
+      await button('Remote Process Group').click()
+      const catalog = input('NiFi Input Port')
+      await catalog.selectOption(nifiPort)
+      assert.match(await catalog.locator('option:checked').textContent(), new RegExp(nifiPort))
+      await input('Connection source').selectOption({ label: 'GenerateFlowFile' })
+      await input('Connection destination').selectOption({ label: 'Remote Process Group' })
+      await button('Add connection').click()
+      await button('Save draft').click()
+      await status('Draft saved (v1)')
+      await input('Target agent').selectOption(agent)
+      const queued = await deploy('Publish and deploy')
+      const record = await page.request.get(`/api/v1/flows/${queued.flow_id}`)
+      const graph = (await record.json()).definition
+      assert.equal(graph.nodes.find(item => item.type === 'RemoteProcessGroup').target_port_id, nifiPort)
+      assert.equal(graph.nodes.find(item => item.type === 'GenerateFlowFile').config['Custom Text'], data)
+      await button('v1 Published').click()
+      await processor('Remote Process Group').click()
+      assert.equal(await input('NiFi Input Port').inputValue(), nifiPort)
+      console.log(`Browser Site-to-Site payload ${createHash('sha256').update(data).digest('hex')}`)
+    }
   }
   console.log(`Browser passed: showed an ineligible inventory agent, published and deployed v1, persisted controller services, and applied v2 (targets: ${agentId}, ${secondAgent}).`)
 } finally {

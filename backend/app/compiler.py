@@ -10,8 +10,10 @@ from .processor_properties import (
     QUEUE_FIELDS, SERVICE_SCHEMAS, resolve_fields, resolve_processor, resolve_properties,
 )
 
+REMOTE_PROCESS_GROUP = "RemoteProcessGroup"
+
 NODE_FIELDS = {"id", "type", "label", "description", "position", "config", "scheduling",
-               "attributes", "auto_terminate_success", "auto_terminate", "retry_relationships"}
+               "attributes", "auto_terminate_success", "auto_terminate", "retry_relationships", "target_port_id"}
 
 
 class CompileError(ValueError):
@@ -77,16 +79,27 @@ def runtime_validation(definition: dict):
     else:
         interfaces, service_config = configured_services(services, errors)
     configurations = {}
+    remote_groups = {node["id"]: node for node in nodes if node["type"] == REMOTE_PROCESS_GROUP}
     for node in nodes:
         for field in sorted(node.keys() - NODE_FIELDS):
             errors.append(f"Node {node['id']}, {field}: unknown processor field.")
+        if node["type"] == REMOTE_PROCESS_GROUP:
+            if not node.get("target_port_id"):
+                errors.append(f"Node {node['id']}: select a NiFi Input Port.")
+            if any(node.get(key) for key in ("config", "scheduling", "attributes", "retry_relationships")) or any(
+                node.get(key) is not None for key in ("auto_terminate_success", "auto_terminate")
+            ):
+                errors.append(f"Node {node['id']}: Remote Process Groups accept an Input Port and a name.")
+            continue
+        if node.get("target_port_id"):
+            errors.append(f"Node {node['id']}: only Remote Process Groups have a target Input Port.")
         if node["type"] not in catalog:
             errors.append(f"Node {node['id']}: {node['type']} is unavailable in the pinned image.")
             continue
         configurations[node["id"]] = (
             resolve_cpp_processor(node, errors) if cpp else resolve_processor(node, interfaces, errors)
         )
-    if configurations and not any(schedule.get("state", "RUNNING") == "RUNNING" for _, schedule, _ in configurations.values()):
+    if not any(schedule.get("state", "RUNNING") == "RUNNING" for _, schedule, _ in configurations.values()):
         errors.append("Keep at least one processor enabled for C2 application confirmation.")
 
     incoming = Counter(edge["target"] for edge in connections)
@@ -97,11 +110,17 @@ def runtime_validation(definition: dict):
         relationship = edge.get("source_relationship", "success")
         scope = f"Connection {edge['id']}"
         if source not in kinds or target not in kinds:
-            errors.append(f"{scope}: source and destination must reference existing processors.")
+            errors.append(f"{scope}: source and destination must reference existing flow nodes.")
+        if source in remote_groups:
+            errors.append(f"{scope}: a Remote Process Group can only receive connections.")
         if source in configurations and relationship not in configurations[source][2]:
             errors.append(f"{scope}: {relationship!r} is not available on the source processor.")
         routed[source].add(relationship)
         queues[edge["id"]] = resolve_fields(edge.get("queue", {}), QUEUE_FIELDS, scope, errors)
+
+    for node_id in remote_groups:
+        if not incoming[node_id]:
+            errors.append(f"Node {node_id}: connect a processor to the Remote Process Group.")
 
     relationship_settings = {}
     for node in nodes:
@@ -159,19 +178,71 @@ def versioned_properties(flow_id, component, values):
     return {"properties": props, "propertyDescriptors": descriptors}
 
 
-def compile_flow(definition: dict) -> str:
+def compile_flow(definition: dict, nifi_url: str | None = None, port_names: dict[str, str] | None = None) -> str:
     if definition.get("runtime", JAVA) == CPP:
-        return compile_minifi_cpp_json(definition)
-    return compile_minifi_java_json(definition)
+        return compile_minifi_cpp_json(definition, nifi_url, port_names)
+    return compile_minifi_java_json(definition, nifi_url, port_names)
 
 
-def compile_minifi_cpp_json(definition: dict) -> str:
+def remote_process_groups(definition, nifi_url, port_names):
+    flow_id = definition["flow_id"]
+    parent = component_id(flow_id, "root")
+    groups = {}
+    for node in definition["nodes"]:
+        if node["type"] != REMOTE_PROCESS_GROUP:
+            continue
+        target = node["target_port_id"]
+        if not nifi_url or target not in (port_names or {}):
+            raise CompileError(f"Node {node['id']}: Input Port {target} is not advertised by the internal NiFi.")
+        group = component_id(flow_id, "remote-group", node["id"])
+        port = component_id(flow_id, "remote-port", node["id"])
+        groups[node["id"]] = {
+            "identifier": group,
+            "instanceIdentifier": group,
+            "componentType": "REMOTE_PROCESS_GROUP",
+            "groupIdentifier": parent,
+            "name": node.get("label") or "Remote Process Group",
+            "comments": node.get("description") or "",
+            "position": node.get("position") or {"x": 0.0, "y": 0.0},
+            "targetUris": f"{nifi_url.rstrip('/')}/nifi",
+            "transportProtocol": "HTTP",
+            "communicationsTimeout": "30 sec",
+            "yieldDuration": "1 sec",
+            "inputPorts": [{
+                "identifier": port,
+                "instanceIdentifier": port,
+                "targetId": target,
+                "name": port_names[target],
+                "groupIdentifier": group,
+                "remoteGroupId": group,
+                "componentType": "REMOTE_INPUT_PORT",
+                "scheduledState": "RUNNING",
+                "concurrentlySchedulableTaskCount": 1,
+                "useCompression": False,
+            }],
+            "outputPorts": [],
+        }
+    return groups
+
+
+def destination_endpoint(groups, node_id):
+    group = groups.get(node_id)
+    if group is None:
+        return None
+    port = group["inputPorts"][0]["identifier"]
+    return {"id": port, "instanceIdentifier": port, "type": "REMOTE_INPUT_PORT", "groupId": group["identifier"]}
+
+
+def compile_minifi_cpp_json(definition: dict, nifi_url=None, port_names=None) -> str:
     errors, configurations, queues, _, relationships = runtime_validation(definition)
     if errors:
         raise CompileError("; ".join(errors))
     flow_id = definition["flow_id"]
+    groups = remote_process_groups(definition, nifi_url, port_names)
     processors = []
     for node in definition["nodes"]:
+        if node["type"] == REMOTE_PROCESS_GROUP:
+            continue
         node_id, kind = node["id"], node["type"]
         properties, schedule, _ = configurations[node_id]
         processors.append({
@@ -195,7 +266,7 @@ def compile_minifi_cpp_json(definition: dict) -> str:
             "identifier": component_id(flow_id, "connection", edge["id"]),
             "name": edge.get("label") or edge["id"],
             "source": {"id": component_id(flow_id, "processor", edge["source"])},
-            "destination": {"id": component_id(flow_id, "processor", edge["target"])},
+            "destination": destination_endpoint(groups, edge["target"]) or {"id": component_id(flow_id, "processor", edge["target"])},
             "selectedRelationships": [edge.get("source_relationship", "success")],
             "backPressureObjectThreshold": queue["object_threshold"],
             "backPressureDataSizeThreshold": queue["data_size_threshold"],
@@ -207,19 +278,23 @@ def compile_minifi_cpp_json(definition: dict) -> str:
         "name": definition["name"],
         "processors": processors,
         "connections": connections,
+        "remoteProcessGroups": list(groups.values()),
     }}, sort_keys=True, separators=(",", ":"))
 
 
-def compile_minifi_java_json(definition: dict) -> str:
+def compile_minifi_java_json(definition: dict, nifi_url=None, port_names=None) -> str:
     errors, configurations, queues, service_config, relationship_settings = runtime_validation(definition)
     if errors:
         raise CompileError("; ".join(errors))
     nodes = definition["nodes"]
     flow_id = definition["flow_id"]
     group_id = component_id(flow_id, "root")
+    groups = remote_process_groups(definition, nifi_url, port_names)
     processors = []
     for index, node in enumerate(nodes):
         kind = node["type"]
+        if kind == REMOTE_PROCESS_GROUP:
+            continue
         processor_id = component_id(flow_id, "processor", node["id"])
         properties, schedule, _ = configurations[node["id"]]
         terminated, retry = relationship_settings[node["id"]]
@@ -283,7 +358,7 @@ def compile_minifi_java_json(definition: dict) -> str:
             "instanceIdentifier": edge_id,
             "name": edge.get("label") or edge["id"],
             "source": endpoint(edge["source"]),
-            "destination": endpoint(edge["target"]),
+            "destination": destination_endpoint(groups, edge["target"]) or endpoint(edge["target"]),
             "selectedRelationships": [edge.get("source_relationship", "success")],
             "labelIndex": 1,
             "zIndex": 0,
@@ -314,7 +389,7 @@ def compile_minifi_java_json(definition: dict) -> str:
             "comments": definition.get("description") or "",
             "position": {"x": 0.0, "y": 0.0},
             "processGroups": [],
-            "remoteProcessGroups": [],
+            "remoteProcessGroups": list(groups.values()),
             "processors": processors,
             "inputPorts": [],
             "outputPorts": [],

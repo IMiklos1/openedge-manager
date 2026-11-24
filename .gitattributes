@@ -1,1 +1,2 @@
 agents/minifi-cpp/*.sh text eol=lf
+nifi/*.sh text eol=lf

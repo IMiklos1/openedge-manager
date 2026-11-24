@@ -86,7 +86,35 @@ read-only. Published revisions remain available for explicit redeployment. **Edg
 shows recent heartbeats and class activity. **Deployments** shows persisted outcomes and ACKs
 with an agent and status filter.
 
-## Deploy a C++ test flow
+## Send FlowFiles to the project's NiFi
+
+The `compose.nifi.yaml` overlay runs Apache NiFi 2.12.0 inside the same project.
+Start NiFi with both edge runtimes from PowerShell or Bash:
+
+```powershell
+docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -f compose.nifi.yaml --profile agent --profile cpp up --build -d --wait
+```
+
+1. Open [NiFi](http://127.0.0.1:8080/nifi/). Add an **Input Port** to the root group,
+   enable remote access, connect it to your downstream NiFi flow and start it.
+2. Open [Flow Manager](http://127.0.0.1:5173). Add a **Remote Process Group** and select
+   the NiFi Input Port by name and UUID. Use **Refresh Input Ports** after changing the NiFi flow.
+3. Connect a processor's outgoing relationship to the Remote Process Group. Save,
+   select a compatible agent and choose **Publish and deploy**. The agent initiates
+   HTTP Site-to-Site and NiFi takes over processing at the Input Port.
+
+The selected UUID is stored in the flow revision. Add a Remote Process Group for each
+target port. Publication checks that NiFi still advertises the UUID.
+`OEM_NIFI_PORT` changes the host UI port. Agents on the Compose network use
+`http://nifi:8080`. The NiFi flow, state and repositories use named volumes.
+Allow time and disk space for the first startup and extension extraction.
+[Local security boundary](docs/SECURITY.md)
+
+Stop the integrated stack with the same file and profile arguments and the `down`
+command. If the picker is empty, check the port's remote-access setting and that
+the API was started with the NiFi overlay.
+
+## Run Java and C++ together
 
 Start both agents with `docker compose --profile agent up -d --build`.
 To run the control plane with only the C++ agent, use `--profile cpp` instead.
@@ -185,6 +213,10 @@ try {
     Remove-Item Env:OEM_CPP_C2_ORIGIN, Env:OEM_API_PORT, Env:OEM_UI_PORT
 }
 ```
+
+Add `-f compose.nifi.yaml` before `-p` in both the startup and cleanup commands to include
+the real Site-to-Site tests. They create an Input Port and downstream processor in
+NiFi, deploy a flow to each agent and check the forwarded payload by SHA-256.
 
 The suite verifies that both runtimes check in, then publishes and deploys different
 C++ revisions and waits for processing metrics, download digests and C2 acknowledgements.

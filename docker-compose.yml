@@ -1,6 +1,6 @@
 x-local-http: &local-http
-  NO_PROXY: 127.0.0.1,localhost,api,ui,storage,c2-observer
-  no_proxy: 127.0.0.1,localhost,api,ui,storage,c2-observer
+  NO_PROXY: 127.0.0.1,localhost,api,ui,storage,c2-observer,nifi
+  no_proxy: 127.0.0.1,localhost,api,ui,storage,c2-observer,nifi
 
 services:
   postgres:
