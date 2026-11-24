@@ -10,8 +10,8 @@ services:
     environment:
       OEM_CPP_AGENT_ID: oem-test-agent-cpp
       OEM_CPP_C2_ORIGIN: ${OEM_CPP_C2_ORIGIN:-http://api:8000}
-      NO_PROXY: api,c2-observer
-      no_proxy: api,c2-observer
+      NO_PROXY: api,c2-observer,nifi
+      no_proxy: api,c2-observer,nifi
     depends_on:
       api: {condition: service_healthy}
     healthcheck:

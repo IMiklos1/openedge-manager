@@ -1,4 +1,5 @@
 from typing import Any, Literal
+from uuid import UUID
 from pydantic import BaseModel, Field, ConfigDict
 
 class AgentHeartbeat(BaseModel):
@@ -29,6 +30,7 @@ class NodeConfig(BaseModel):
     auto_terminate_success: bool | None = None
     auto_terminate: list[str] | None = None
     retry_relationships: list[str] = Field(default_factory=list)
+    target_port_id: UUID | None = None
 
 
 class ControllerService(BaseModel):
