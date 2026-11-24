@@ -140,6 +140,19 @@ Native Windows, Linux ARM64, physical remote devices, C++ processors beyond the 
 exposed types and production enrollment remain open.
 [Reproduction commands](../README.md#mixed-runtime-smoke-tests)
 
+## Internal NiFi Site-to-Site
+
+The optional project overlay runs pinned Apache NiFi 2.12.0. Flow Manager discovers
+remote-access Input Ports from NiFi and stores the selected UUID in each revision.
+Both pinned MiNiFi runtimes compile and deploy Remote Process Groups over outbound
+HTTP Site-to-Site. The integration test creates an Input Port and downstream
+InvokeHTTP in NiFi, then checks payload digests from both real runtimes after NiFi
+has forwarded them. An unknown UUID cannot be published.
+
+This milestone uses Linux amd64 containers on the trusted Compose network.
+Authenticated TLS, external devices, native Windows and Linux ARM64 remain open.
+[Startup and reproducible tests](../README.md#send-flowfiles-to-the-projects-nifi)
+
 ## Phase 0 — Runtime spike (2–3 weeks)
 
 Expand the tested runtime/build matrix to Windows x64 and Linux ARM64. Verify processor

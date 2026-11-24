@@ -1,3 +1,4 @@
+from pydantic import HttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
@@ -9,11 +10,19 @@ class Settings(BaseSettings):
     postgres_db: str = "oem"
     postgres_user: str = "oem"
     postgres_password: str | None = None
+    oem_nifi_url: HttpUrl | None = None
     minifi_probe_agent_id: str = ""
     minifi_flow_agent_id: str = ""
     minifi_flow_agent_ids: str = ""
     minifi_enable_compose_test_targets: bool = False
     minifi_allow_execution_processors: bool = False
+
+    @field_validator("oem_nifi_url")
+    @classmethod
+    def nifi_origin_only(cls, url: HttpUrl | None) -> HttpUrl | None:
+        if url and (url.username or url.password or url.path not in ("", "/") or url.query or url.fragment):
+            raise ValueError("OEM_NIFI_URL must be an origin without credentials")
+        return url
 
     @property
     def flow_agent_ids(self) -> frozenset[str]:

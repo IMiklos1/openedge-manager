@@ -162,3 +162,5 @@ td button { font-size: 12px; }
 .add-connection select { max-width: 185px; }
 .add-connection button { font-size: 12px; }
 .field-help { font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+
+.port-id { overflow-wrap: anywhere; }

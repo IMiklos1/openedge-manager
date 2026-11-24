@@ -16,6 +16,7 @@ jobs:
       OEM_CPP_C2_ORIGIN: http://c2-observer:8001
       OEM_API_PORT: "0"
       OEM_UI_PORT: "0"
+      OEM_NIFI_PORT: "0"
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
@@ -28,6 +29,7 @@ jobs:
           docker compose --profile agent --profile fleet config --quiet
           docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml --profile agent --profile cpp config --quiet
           docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml --profile smoke config --quiet
-      - run: docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml --profile smoke up --build --exit-code-from smoke
+          docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -f compose.nifi.yaml --profile smoke config --quiet
+      - run: docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -f compose.nifi.yaml --profile smoke up --build --exit-code-from smoke
       - if: always()
-        run: docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml --profile smoke down
+        run: docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -f compose.nifi.yaml --profile smoke down

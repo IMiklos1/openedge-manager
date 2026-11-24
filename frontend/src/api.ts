@@ -78,6 +78,13 @@ export type Catalog = Record<string, {
   configuration?: ProcessorSchema
 }>
 
+export const remoteProcessGroup = 'RemoteProcessGroup'
+
+export interface InputPort {
+  id: string
+  name: string
+}
+
 export interface Processor {
   id: string
   type: string
@@ -90,6 +97,7 @@ export interface Processor {
   auto_terminate_success?: boolean | null
   auto_terminate?: string[] | null
   retry_relationships?: string[]
+  target_port_id?: string | null
 }
 
 export interface FlowConnection {

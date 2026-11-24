@@ -88,3 +88,16 @@ Additional native processors need their own property and runtime verification.
 
 [Apache MiNiFi C++ C2 contract](https://github.com/apache/nifi-minifi-cpp/blob/1a4b84eb8b53eebcf7c92d83f6ae818f440e33ee/C2.md) ·
 [Apache MiNiFi Java System Admin Guide](https://github.com/apache/nifi/blob/main/minifi/minifi-docs/src/main/markdown/System_Admin_Guide.md#config-file)
+
+## ADR-010 — Discover internal NiFi Input Ports by UUID
+
+Use a project-local Apache NiFi instance and its Site-to-Site catalog. Keep the
+NiFi origin in server configuration. Store the selected UUID on a Remote Process
+Group in the existing versioned graph. Java and C++ use separate local sending port
+identities while preserving the same NiFi target UUID. This keeps the flow graph
+portable between the two pinned runtimes and the published artifact immutable.
+One editor node represents one target Input Port.
+
+The Compose overlay is the local HTTP profile. A production profile needs
+authenticated NiFi connectivity, port authorization, and a deployment origin
+reachable by the edge agents.
