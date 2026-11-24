@@ -70,6 +70,12 @@ configuration are outside this profile.
 
 ## Outbound-only deployment
 
+The NiFi overlay adds HTTP Site-to-Site to the same Compose project. The API reads
+ports from NiFi's Site-to-Site catalog. Flow revisions store the selected UUID,
+and each runtime's configuration connects the graph to a local sending port
+with the NiFi target UUID. The edge agent makes the data connection. The receiving
+flow verifies data delivery independently of C2 deployment state.
+
 In local Compose, the agent sends HTTP requests to the API service over the project network.
 Production agents will initiate HTTPS connections, receive pending work in C2 responses, and
 fetch artifacts over HTTPS using short-lived credentials. In the local slice, the agent

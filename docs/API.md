@@ -7,6 +7,7 @@ Management routes use `/api/v1` except for readiness at `/health`.
 | GET | `/health` (root) | API and database readiness |
 | GET | `/agents` | List agents by class or ID/hostname search with heartbeat freshness and deployment readiness |
 | GET | `/agent-classes` | List observed classes and recent check-in counts |
+| GET | `/nifi/input-ports` | Read the live internal NiFi Site-to-Site Input Port UUIDs and names |
 | GET | `/catalog` | Processor descriptors for `runtime=minifi-java` (default) or `runtime=minifi-cpp` |
 | GET | `/flow-editor` | Queue settings, controller service descriptors and runtime version |
 | POST | `/agents/{id}/heartbeat` | OEM development heartbeat only |
@@ -84,6 +85,13 @@ recorded timestamp. The deployment status includes `ack_state`, `acknowledged_at
 
 
 ## Versioned workspace
+
+A `RemoteProcessGroup` node is a destination with a `target_port_id` UUID. The
+edge references the local node ID. Both compilers resolve it to a local sending
+port and preserve the separate target UUID. `GET /nifi/input-ports` returns
+`id` and `name` objects, an empty list for an empty catalog, or 503 when the
+catalog is unavailable. Publication rejects an unadvertised UUID with 422.
+The NiFi origin is configured server-side.
 
 `definition.runtime` accepts `minifi-java` (default for existing flows) or
 `minifi-cpp`. `GET /flow-editor?runtime=...` lists the selected profile's editor settings.
