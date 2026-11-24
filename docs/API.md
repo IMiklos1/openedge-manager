@@ -33,6 +33,8 @@ certificate rotation and diagnostics.
 These development routes are at the API root. Both accept uncompressed JSON with
 `Content-Type: application/json` and a 4 MiB body limit. They return 415 for an unsupported
 media type or encoding, 413 for an oversized body, and 422 for an invalid message.
+For a 422, the API log records the first failing field path and validation error type,
+and the byte offset if UTF-8 is invalid, without logging the body or field values.
 
 | Method | Path | Behavior |
 | --- | --- | --- |

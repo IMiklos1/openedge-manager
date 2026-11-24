@@ -88,6 +88,13 @@ services:
       service: minifi-agent-01
     environment: *local-http
 
+  minifi-cpp:
+    profiles: [agent, cpp]
+    extends:
+      file: compose.minifi.yaml
+      service: minifi-cpp
+    environment: *local-http
+
   minifi-agent-02:
     profiles: [fleet]
     extends:

@@ -18,11 +18,13 @@ PostgreSQL, Redis AOF, and SeaweedFS persist in separate named volumes. SeaweedF
 the local S3 bucket in `s3data`. The previous MinIO/Silo volume has its own format and requires
 an S3-level object migration if it contains data.
 
-The edge data plane uses the official Apache MiNiFi Java 2.12.0 container with C2 settings
-in `compose.minifi.yaml`. It starts with the packaged empty flow and can reload a published
-test flow through C2. Its bootstrap status
-listener binds to container loopback. The agent publishes no ports. Base and infrastructure
-image references include multi-architecture manifest digests.
+The local `agent` profile uses the official Apache MiNiFi Java 2.12.0 and C++ 1.1.0
+containers defined in `compose.minifi.yaml`. They use distinct agent IDs, the same test
+class, and outbound C2 to the API. Java starts with its packaged empty flow; C++ starts
+with the repository's native starter flow. Both can load a published flow for their
+runtime through C2 and publish no ports. The Java bootstrap status listener binds to
+container loopback. Base and infrastructure image references include multi-architecture
+manifest digests.
 
 ## Canonical flow model
 OEM Flow DSL is the source of truth. A versioned compiler translates approved nodes to the
@@ -64,7 +66,7 @@ and relationships from the stock image's NAR manifests. OEM verifies declared co
 against the exact runtime heartbeat before queueing or dispatching a deployment. The
 catalog lists 117 processors and 47 controller services. Device-side validators still
 govern valid values and external resources. [Catalog provenance and coverage](PROCESSOR_CATALOG.md)
-The C++ profile exposes the tested GenerateFlowFile, UpdateAttribute and LogAttribute
+The C++ runtime exposes the tested GenerateFlowFile, UpdateAttribute and LogAttribute
 processors with C++ property names. C++ controller services and relationship retry
 configuration are outside this profile.
 
