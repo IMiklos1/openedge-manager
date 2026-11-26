@@ -4,7 +4,7 @@ from graphlib import CycleError, TopologicalSorter
 from uuid import NAMESPACE_URL, uuid5
 
 from .catalog import CONTROLLER_SERVICES, PROCESSORS
-from .cpp_processors import CPP_PROCESSORS, resolve_cpp_processor
+from .cpp_processors import CPP_PROCESSORS, CPP_SERVICES, resolve_cpp_processor
 from .runtimes import CPP, JAVA
 from .processor_properties import (
     QUEUE_FIELDS, SERVICE_SCHEMAS, resolve_fields, resolve_processor, resolve_properties,
@@ -24,28 +24,31 @@ def component_id(flow_id: str, *parts: str) -> str:
     return str(uuid5(NAMESPACE_URL, json.dumps(["openedge-manager", flow_id, *parts])))
 
 
-def configured_services(items, errors):
+def configured_services(items, errors, cpp):
     if len(items) > 100:
         errors.append("Use at most 100 controller services.")
     types = {item["id"]: item["type"] for item in items}
     if len(types) != len(items):
         errors.append("Controller service IDs must be unique.")
+    schemas = CPP_SERVICES if cpp else SERVICE_SCHEMAS
     interfaces = {
-        key: {api["className"] for api in CONTROLLER_SERVICES.get(kind, {}).get("apis", [])}
+        key: {api["className"] for api in schemas.get(kind, {}).get("apis", [])}
         for key, kind in types.items()
     }
     configurations = {}
     for item in items:
         scope = f"Controller service {item['id']}"
-        if (schema := SERVICE_SCHEMAS.get(item["type"])) is None:
-            errors.append(f"{scope}: {item['type']} is unavailable in the pinned image.")
+        if (schema := schemas.get(item["type"])) is None:
+            errors.append(f"{scope}: {item['type']} is unavailable in the pinned runtime.")
             continue
-        properties, _ = resolve_properties(item, schema, interfaces, scope, errors)
+        if cpp and item.get("state") == "DISABLED":
+            errors.append(f"{scope}: the native flow format enables configured controller services.")
+        properties, _ = resolve_properties(item, schema, interfaces, scope, errors, defaults={} if cpp else None)
         configurations[item["id"]] = properties
     try:
         graph = {
             key: [value for name, value in values.items()
-                  if SERVICE_SCHEMAS.get(types[key], {}).get("properties", {}).get(name, {}).get("service") and value]
+                  if schemas.get(types[key], {}).get("properties", {}).get(name, {}).get("service") and value]
             for key, values in configurations.items()
         }
         list(TopologicalSorter(graph).static_order())
@@ -72,12 +75,7 @@ def runtime_validation(definition: dict):
     cpp = definition.get("runtime", JAVA) == CPP
     catalog = CPP_PROCESSORS if cpp else PROCESSORS
     services = definition.get("controller_services", [])
-    if cpp:
-        interfaces, service_config = {}, {}
-        if services:
-            errors.append("Controller services are unavailable in the C++ editor profile.")
-    else:
-        interfaces, service_config = configured_services(services, errors)
+    interfaces, service_config = configured_services(services, errors, cpp)
     configurations = {}
     remote_groups = {node["id"]: node for node in nodes if node["type"] == REMOTE_PROCESS_GROUP}
     for node in nodes:
@@ -97,7 +95,7 @@ def runtime_validation(definition: dict):
             errors.append(f"Node {node['id']}: {node['type']} is unavailable in the pinned image.")
             continue
         configurations[node["id"]] = (
-            resolve_cpp_processor(node, errors) if cpp else resolve_processor(node, interfaces, errors)
+            resolve_cpp_processor(node, interfaces, errors) if cpp else resolve_processor(node, interfaces, errors)
         )
     if not any(schedule.get("state", "RUNNING") == "RUNNING" for _, schedule, _ in configurations.values()):
         errors.append("Keep at least one processor enabled for C2 application confirmation.")
@@ -162,15 +160,22 @@ def runtime_validation(definition: dict):
     return errors, configurations, queues, service_config, relationship_settings
 
 
-def versioned_properties(flow_id, component, values):
+def service_property_value(flow_id, field, value):
     # Internal service references use the same deterministic identity as the controller service.
+    return component_id(flow_id, "service", value) if field.get("service") and value else value
+
+
+def native_properties(flow_id, schema, values):
+    return {key: service_property_value(flow_id, schema["properties"].get(key, {}), value)
+            for key, value in values.items()}
+
+
+def versioned_properties(flow_id, component, values):
     props, descriptors = {}, {}
     for key, value in values.items():
         field = component["properties"].get(key, {})
         service_reference = bool(field.get("service"))
-        if service_reference and value:
-            value = component_id(flow_id, "service", value)
-        props[key] = value
+        props[key] = service_property_value(flow_id, field, value)
         descriptors[key] = {
             "name": key, "displayName": field.get("displayName", key), "dynamic": key not in component["properties"],
             "sensitive": False, "identifiesControllerService": service_reference,
@@ -234,7 +239,7 @@ def destination_endpoint(groups, node_id):
 
 
 def compile_minifi_cpp_json(definition: dict, nifi_url=None, port_names=None) -> str:
-    errors, configurations, queues, _, relationships = runtime_validation(definition)
+    errors, configurations, queues, service_config, relationships = runtime_validation(definition)
     if errors:
         raise CompileError("; ".join(errors))
     flow_id = definition["flow_id"]
@@ -250,7 +255,7 @@ def compile_minifi_cpp_json(definition: dict, nifi_url=None, port_names=None) ->
             "name": node.get("label") or kind,
             "type": CPP_PROCESSORS[kind]["type"],
             "bundle": CPP_PROCESSORS[kind]["bundle"],
-            "properties": properties,
+            "properties": native_properties(flow_id, CPP_PROCESSORS[kind], properties),
             "schedulingStrategy": "TIMER_DRIVEN",
             "schedulingPeriod": schedule["period"],
             "concurrentlySchedulableTaskCount": schedule["tasks"],
@@ -273,11 +278,23 @@ def compile_minifi_cpp_json(definition: dict, nifi_url=None, port_names=None) ->
             "flowFileExpiration": queue["expiration"],
         })
 
+    services = []
+    for item in definition.get("controller_services", []):
+        schema = CPP_SERVICES[item["type"]]
+        services.append({
+            "identifier": component_id(flow_id, "service", item["id"]),
+            "name": item.get("label") or item["type"],
+            "type": schema["type"],
+            "bundle": schema["bundle"],
+            "properties": native_properties(flow_id, schema, service_config[item["id"]]),
+        })
+
     return json.dumps({"rootGroup": {
         "identifier": component_id(flow_id, "root"),
         "name": definition["name"],
         "processors": processors,
         "connections": connections,
+        **({"controllerServices": services} if services else {}),
         "remoteProcessGroups": list(groups.values()),
     }}, sort_keys=True, separators=(",", ":"))
 

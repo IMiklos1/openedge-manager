@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .runtimes import CPP, VERSIONS
 from .config import settings
+from .cpp_processors import CPP_COMPONENTS_BY_TYPE
 from .models import Agent, Deployment, FlowArtifact
 
 ACTIVE = ("PENDING", "DISPATCHED", "ACKNOWLEDGED")
@@ -15,6 +16,8 @@ DELIVERABLE = ("PENDING", "DISPATCHED")
 SUCCESS_ACK = ("FULLY_APPLIED", "NO_OPERATION")
 MANIFEST_COMPONENTS = "minifi_components"
 EXECUTION_TYPES = {
+    "org.apache.nifi.minifi.processors.ExecuteProcess",
+    "org.apache.nifi.minifi.processors.ExecuteScript",
     "org.apache.nifi.processors.standard.ExecuteProcess",
     "org.apache.nifi.processors.standard.ExecuteStreamCommand",
 }
@@ -81,6 +84,19 @@ def missing_agent_components(agent: Agent, components: list[dict]) -> list[str]:
     })
 
 
+def unsupported_cpp_properties(agent: Agent, components: list[dict]) -> list[str]:
+    if agent.runtime != CPP:
+        return []
+    unsupported = []
+    for component in components:
+        fields = CPP_COMPONENTS_BY_TYPE.get(component["type"], {}).get("properties", {})
+        for name in component["properties"]:
+            platforms = fields.get(name, {}).get("platforms")
+            if platforms and agent.os_name not in platforms:
+                unsupported.append(f"{component['name']}, {name} requires {' or '.join(platforms)}")
+    return sorted(set(unsupported))
+
+
 def flow_update(
     db: Session, agent: Agent, reported_flow_id: str | None, seen_at: datetime,
 ) -> UpdateConfiguration | None:
@@ -102,7 +118,7 @@ def flow_update(
         return None
 
     components = artifact_components(artifact)
-    if not permits_execution(components) or missing_agent_components(agent, components):
+    if not permits_execution(components) or missing_agent_components(agent, components) or unsupported_cpp_properties(agent, components):
         return None
     deployment.status = "DISPATCHED"
     path = f"configuration/{deployment.id}"

@@ -53,3 +53,58 @@ in a draft. External secret provisioning, parameter contexts, process groups, cu
 NARs and shared scheduling strategies outside the standalone timer-driven profile
 remain open. Execution of the entire processor catalog has not been qualified on
 real external systems. [Implementation plan](IMPLEMENTATION_PLAN.md)
+
+## MiNiFi C++ 1.1.0 catalog
+
+The native catalog combines 94 processors and 22 controller services from Apache
+MiNiFi C++ 1.1.0. The pinned Linux amd64 image advertises 88 processors and 21 services.
+The Windows x86-64 MSI contains 87 processors and 20 services. This adds Windows-specific
+SMB, event log and performance counter processors to the same C++ workspace.
+
+The Flow Manager exposes the native bundle coordinates, required and sensitive fields,
+defaults, choices, validators, dynamic properties, relationship names and controller service
+references. The inspector identifies platform-specific settings. Publication uses the
+native JSON flow format. Deployment requires matching components in the target's full C2
+manifest, including their exact bundle versions. A configured platform-specific property
+also requires matching OS inventory. Processor configuration, external services and
+availability depend on the installed extensions and the target environment.
+
+To regenerate from the pinned Linux image and Windows release, capture the Linux manifest
+in PowerShell 7.4 or later from the repository root:
+
+~~~powershell
+$cppLinuxImage = "apache/nifi-minifi-cpp:1.1.0@sha256:647d0548f8411aeb7fc58def0666077c25f950ba85cf5cc58d4d28500b58e0cd"
+docker run --rm --platform linux/amd64 --entrypoint bin/minifi $cppLinuxImage --manifest > cpp-linux-manifest.json
+~~~
+
+Use the Apache [Windows x86-64 MSI release](https://archive.apache.org/dist/nifi/nifi-minifi-cpp-1.1.0/).
+The release MSI SHA-512 is
+~~~text
+e3c4194b453c5e12d6c1132cf9a2a68c96085ca22ef0f1ca19209c8eedab862811d02d567aa073104e28f614ebadcdd04cf1e0b33878dcb8ae036ce7622475eb
+~~~
+Select the packaged extensions during installation or extract the full MSI, then run the
+agent binary from the installation directory. Adjust the installation path if needed:
+
+~~~powershell
+$cppWindowsManifest = Join-Path (Get-Location).Path "cpp-windows-manifest.json"
+Push-Location "$env:ProgramFiles\ApacheNiFiMiNiFi\nifi-minifi-cpp"
+try {
+    & .\bin\minifi.exe --manifest > $cppWindowsManifest
+} finally {
+    Pop-Location
+}
+python scripts/extract-minifi-cpp-catalog.py cpp-linux-manifest.json cpp-windows-manifest.json backend/app/minifi_cpp_catalog.json
+git diff --exit-code -- backend/app/minifi_cpp_catalog.json
+~~~
+
+The C++ metadata derives from [Apache NiFi MiNiFi C++ release source](https://github.com/apache/nifi-minifi-cpp/tree/1a4b84eb8b53eebcf7c92d83f6ae818f440e33ee),
+Copyright The Apache Software Foundation, under the [Apache License 2.0](licenses/Apache-2.0.txt).
+
+The stock catalog includes `ExecuteScript` with Python and Lua engines. When an operator
+configures a script file, provision it and its dependencies on the agent first. On native
+Windows, enable the MSI Python extension and install Python for the Windows service account.
+Deployment of `ExecuteScript` and `ExecuteProcess` requires the separate
+`MINIFI_ALLOW_EXECUTION_PROCESSORS=true` opt-in. Custom extensions and Python processor
+packages require installation outside OEM. Custom processors absent from the pinned
+manifests, runtime-specific scheduling outside timer-driven, and native relationship retry
+settings are outside this editor profile.

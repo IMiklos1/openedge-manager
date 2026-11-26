@@ -20,10 +20,11 @@ Runtime and manifest checks use claims from the agent. Production deployment req
 enrollment, scoped artifact access, mTLS and authenticated management operations.
 
 The downloadable artifact can authorize filesystem access and interaction with services
-reachable from the device. Run it with least-privilege device permissions. The two
-bundled system command processors require `MINIFI_ALLOW_EXECUTION_PROCESSORS=true` to
-deploy. This limits those two types and other component behavior still depends on their
-deployment environment and properties. Sensitive descriptor values are rejected before
+reachable from the device. Run it with least-privilege device permissions. Java
+`ExecuteProcess` and `ExecuteStreamCommand`, and C++ `ExecuteProcess` and `ExecuteScript`,
+require `MINIFI_ALLOW_EXECUTION_PROCESSORS=true` to deploy. Enable it only for trusted
+targets and operators. Other component behavior depends on its deployment environment
+and properties. Sensitive descriptor values are rejected before
 draft persistence. Parameter contexts and remote secret distribution are pending.
 
 The optional NiFi overlay uses unauthenticated HTTP and publishes its UI and API on

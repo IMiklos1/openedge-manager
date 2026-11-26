@@ -129,16 +129,30 @@ are still open. [Reproduction commands](../README.md#verify-the-workspace-in-chr
 The pinned Java 2.12.0 and C++ 1.1.0 agents run side by side. OEM detects the runtime
 from its first full C2 manifest and uses the matching artifact builder, catalog and
 C2 download arguments. Migration 0004 preserves the Java identity of existing artifacts.
-The C++ editor exposes GenerateFlowFile, UpdateAttribute and LogAttribute.
 
 Verified on Linux amd64 with 21 mixed Compose smoke tests and the Chromium workspace
 test. Both real agents applied two distinct revisions. The native smoke test verified
 artifact download digests, correlated acknowledgements and LogAttribute input counts.
 Chromium verified the runtime picker, a blocked cross-runtime target, persisted native
 properties, Java controller services, revision reopening and deployment states.
-Native Windows, Linux ARM64, physical remote devices, C++ processors beyond the three
-exposed types and production enrollment remain open.
+Native Windows, Linux ARM64, physical remote devices and production enrollment remain open.
 [Reproduction commands](../README.md#mixed-runtime-smoke-tests)
+
+## Native processor catalog and Windows heartbeat handling
+
+Implemented all 94 processors and 22 controller services in the pinned Linux amd64
+image and Windows x86-64 installer manifests. The C++ editor and compiler use their
+native properties and relationship names, validate service references and enforce
+platform-specific properties at deployment. The native catalog is generated from the
+release binaries and can be reproduced with [the catalog commands](PROCESSOR_CATALOG.md#minifi-c-110-catalog).
+
+The heartbeat regression sends malformed UTF-8 confined to the hostname and checks
+the persisted hostname, OS, architecture and C++ capability manifest. The Linux native
+smoke tests compare every bundled component with the live heartbeat, verify record
+transformation with native controller services, and exercise the execution opt-in.
+The Windows catalog was extracted from the checksum-verified MSI with `--manifest` under
+Wine. Native Windows flow execution, real Windows heartbeat capture, ARM64 and processor
+execution against external systems remain unverified.
 
 ## Internal NiFi Site-to-Site
 

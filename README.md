@@ -124,9 +124,10 @@ the API was started with the NiFi overlay.
 Start both agents with `docker compose --profile agent up -d --build`.
 To run the control plane with only the C++ agent, use `--profile cpp` instead.
 
-In **Flow Manager**, choose **MiNiFi C++** under **Flow runtime** and load the test
-flow. The C++ palette includes GenerateFlowFile, UpdateAttribute and LogAttribute with
-their native properties. After the first full heartbeat the new C++ target appears as
+In **Flow Manager**, choose **MiNiFi C++** under **Flow runtime**. Its palette exposes
+94 processors and 22 controller services from the pinned Linux image and Windows MSI.
+Check each component's platform and the target's full C2 manifest before deploying.
+Load the test flow for a quick check. After the first full heartbeat the C++ target appears as
 `oem-test-agent-cpp`. Save, select it, and choose **Publish and deploy**. Java and C++
 agents are both visible, and deployment requires the flow and target to use the same runtime.
 Existing flows use Java unless their saved revision specifies C++.
@@ -136,17 +137,18 @@ The [C++ starter script](agents/minifi-cpp/start.sh) shows the native
 reachable C2 origin, and a matching pinned runtime and manifest. Java uses its
 `bootstrap.conf` settings described below.
 
-If native Windows MiNiFi C++ 1.1.0 sends an invalid UTF-8 hostname and receives a
-C2 HTTP 422, create `conf\minifi.properties.d\99-oem-c2.properties` with the following
-setting and restart the agent:
+On native Windows, keep the full device metadata in the heartbeat. If you previously
+removed `DeviceInfoNode` as a workaround for HTTP 422, restore it and restart the agent.
+Keep `nifi.c2.full.heartbeat=true` so OEM can detect the runtime and components.
 
 ```properties
-nifi.c2.root.classes=AgentInformation,FlowInformation,AssetInformation
+nifi.c2.root.classes=DeviceInfoNode,AgentInformation,FlowInformation,AssetInformation
 ```
 
-This workaround omits device metadata (including hostname, OS, and architecture)
-but keeps agent identity, manifest, and flow reporting. Keep `nifi.c2.full.heartbeat=true`
-so OEM can detect the runtime and components.
+The API accepts UTF-8 hostnames and recovers legacy Windows-1252 hostname bytes in full
+C++ Windows heartbeats. If a 422 persists, check the API's validation field and byte
+offset. For processors that run scripts or operating-system commands, see the
+[execution opt-in and catalog coverage](docs/PROCESSOR_CATALOG.md#minifi-c-110-catalog).
 
 ## Run the automated smoke tests
 
