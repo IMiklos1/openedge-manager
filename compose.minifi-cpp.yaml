@@ -23,5 +23,6 @@ services:
   smoke:
     environment:
       OEM_SMOKE_CPP: "true"
+      MINIFI_ALLOW_EXECUTION_PROCESSORS: ${MINIFI_ALLOW_EXECUTION_PROCESSORS:-false}
     depends_on:
       minifi-cpp: {condition: service_healthy}

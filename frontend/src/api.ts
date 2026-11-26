@@ -20,6 +20,7 @@ export interface Field {
   choice_labels?: Record<string, string>
   dependencies?: Record<string, string[]>
   modifies_classpath?: boolean
+  platforms?: string[]
 }
 
 export interface ComponentSchema {
@@ -28,14 +29,16 @@ export interface ComponentSchema {
   bundle: { group: string; artifact: string; version: string }
   tags: string[]
   dynamic_properties: boolean
-  dynamic?: { name: string; description: string; value: string; expressionLanguageScope: string }[]
+  dynamic?: { name: string; description: string; value?: string; expressionLanguageScope: string }[]
   properties: Record<string, Field>
+  platforms?: string[]
 }
 
 export interface ProcessorSchema extends ComponentSchema {
   inputRequirement?: 'INPUT_REQUIRED' | 'INPUT_ALLOWED' | 'INPUT_FORBIDDEN'
   relationships: Record<string, { description?: string }>
-  dynamicRelationship?: { name: string; description: string }
+  dynamicRelationship?: boolean | { name: string; description: string }
+  dynamicRelationshipStrategy?: { property: string; dynamicValue: string }
   scheduling: Record<string, Field>
 }
 
@@ -61,6 +64,12 @@ export interface ControllerService {
 export function sourceRelationships(node: Processor, schema: ProcessorSchema | undefined) {
   if (!schema) return []
   const fixed = Object.keys(schema.relationships)
+  if (schema.platforms) {
+    const strategy = schema.dynamicRelationshipStrategy
+    const dynamic = schema.dynamicRelationship && (!strategy
+      || (node.config[strategy.property] ?? schema.properties[strategy.property].default) === strategy.dynamicValue)
+    return dynamic ? [...new Set([...fixed, ...Object.keys(node.attributes ?? {})])] : fixed
+  }
   if (node.type === 'DistributeLoad') {
     const value = String(node.config['Number of Relationships'] ?? schema.properties['Number of Relationships'].default)
     if (/^[0-9]{1,3}$/.test(value)) return Array.from({ length: Number(value) }, (_, index) => String(index + 1))

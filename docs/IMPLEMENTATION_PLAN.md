@@ -129,16 +129,37 @@ are still open. [Reproduction commands](../README.md#verify-the-workspace-in-chr
 The pinned Java 2.12.0 and C++ 1.1.0 agents run side by side. OEM detects the runtime
 from its first full C2 manifest and uses the matching artifact builder, catalog and
 C2 download arguments. Migration 0004 preserves the Java identity of existing artifacts.
-The C++ editor exposes GenerateFlowFile, UpdateAttribute and LogAttribute.
 
 Verified on Linux amd64 with 21 mixed Compose smoke tests and the Chromium workspace
 test. Both real agents applied two distinct revisions. The native smoke test verified
 artifact download digests, correlated acknowledgements and LogAttribute input counts.
 Chromium verified the runtime picker, a blocked cross-runtime target, persisted native
 properties, Java controller services, revision reopening and deployment states.
-Native Windows, Linux ARM64, physical remote devices, C++ processors beyond the three
-exposed types and production enrollment remain open.
+Native Windows, Linux ARM64, physical remote devices and production enrollment remain open.
 [Reproduction commands](../README.md#mixed-runtime-smoke-tests)
+
+## Native processor catalog and Windows heartbeat handling
+
+Implemented all 94 processors and 22 controller services in the pinned Linux amd64
+image and Windows x86-64 installer manifests. The C++ editor and compiler use their
+native properties and relationship names, validate service references and enforce
+platform-specific properties at deployment. The native catalog is generated from the
+release binaries and can be reproduced with [the catalog commands](PROCESSOR_CATALOG.md#minifi-c-110-catalog).
+
+On Linux amd64, all six targeted tests passed. They compared every bundled component
+with the live heartbeat, deployed two native revisions, checked record transformation
+and dynamic routing, and rejected platform mismatches, sensitive draft values and
+execution without opt-in. A separate opt-in run deployed an `ExecuteScript` Python
+flow over C2 and verified the HTTP payload and script-generated header.
+The Windows hostname regression sent raw Windows-1252 bytes and verified the hostname,
+OS, architecture and capability manifest in PostgreSQL. The Chromium workspace test
+opened the expanded catalog and saved and deployed real Java and C++ flow revisions.
+[Smoke commands](../README.md#mixed-runtime-smoke-tests) ·
+[Python opt-in command](../README.md#verify-native-python-execution)
+
+The Windows catalog was extracted from the checksum-verified MSI with `--manifest` under
+Wine. Native Windows flow execution, real Windows heartbeat capture, ARM64 and processor
+execution against external systems remain unverified.
 
 ## Internal NiFi Site-to-Site
 

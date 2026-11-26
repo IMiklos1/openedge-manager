@@ -68,6 +68,58 @@ class ComposeSmokeTest(unittest.TestCase):
         with error.exception as response:
             self.assertEqual(response.code, 404)
 
+    def test_cpp_windows_hostname_legacy_bytes_are_scoped_to_the_hostname(self):
+        agent_id = str(uuid4())
+        hostname = "Tesztszámító"
+        payload = {
+            "agentInfo": {"identifier": agent_id, "agentManifest": {
+                "agentType": "cpp", "buildInfo": {"version": "1.1.0"},
+                "bundles": [{
+                    "group": "org.apache.nifi.minifi", "artifact": "minifi-standard-processors", "version": "1.1.0",
+                    "componentManifest": {"processors": [{"type": "org.apache.nifi.minifi.processors.GetFile"}]},
+                }],
+            }},
+            "deviceInfo": {"systemInfo": {"operatingSystem": "Windows", "machineArch": "x86_64"},
+                           "networkInfo": {"hostname": hostname}},
+        }
+        message = json.dumps(payload, ensure_ascii=False).encode("cp1252")
+
+        def send(body, operation="heartbeat"):
+            return urlopen(Request(f"{C2}/{operation}", data=body,
+                                   headers={"Content-Type": "application/json"}), timeout=5)
+
+        with send(message) as response:
+            self.assertEqual(response.status, 200)
+        with SessionLocal() as db:
+            agent = db.get(Agent, agent_id)
+            self.assertEqual((agent.hostname, agent.os_name, agent.architecture), (hostname, "Windows", "x86_64"))
+            self.assertEqual((agent.runtime, agent.runtime_version, agent.status), ("minifi-cpp", "1.1.0", "ONLINE"))
+            self.assertEqual(agent.capabilities["minifi_components"][0][0], "org.apache.nifi.minifi.processors.GetFile")
+        self.assertEqual(get_json(f"{API}{AGENTS}?q={agent_id}")[0]["hostname"], hostname)
+
+        payload["deviceInfo"]["networkInfo"]["hostname"] = "Árvíztűrő tükörfúrógép"
+        with send(json.dumps(payload, ensure_ascii=False).encode("utf-8")) as response:
+            self.assertEqual(response.status, 200)
+        self.assertEqual(get_json(f"{API}{AGENTS}?q={agent_id}")[0]["hostname"], "Árvíztűrő tükörfúrógép")
+
+        invalid_messages = {
+            "wrong runtime": message.replace(b'"cpp"', b'"minifi-java"'),
+            "wrong OS": message.replace(b'"Windows"', b'"Linux"'),
+            "invalid identifier": message.replace(agent_id.encode(), b'invalid-\xe1'),
+            "invalid ignored field": message.replace(b'"networkInfo"', b'"ignored": "\xe1", "networkInfo"'),
+            "duplicate key": message.replace(b'"hostname"', b'"hostname": "ambiguous", "hostname"'),
+            "malformed JSON": message[:-1],
+        }
+        for case, body in invalid_messages.items():
+            with self.subTest(case=case), self.assertRaises(HTTPError) as error:
+                send(body)
+            with error.exception as response:
+                self.assertEqual(response.status, 422)
+        with self.assertRaises(HTTPError) as error:
+            send(b'{"operationId":"invalid-\xe1","operationState":{"state":"NO_OPERATION"}}', "acknowledge")
+        with error.exception as response:
+            self.assertEqual(response.status, 422)
+
     def test_c2_media_type_and_size_limit(self):
         cases = (
             (b"{}", "text/plain", 415),

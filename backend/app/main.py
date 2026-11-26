@@ -10,13 +10,13 @@ from .db import get_db
 from .models import Agent, Flow, Deployment, FlowArtifact, FlowRevision
 from .schemas import AgentHeartbeat, FlowCreate, FlowEdit, DeploymentCreate
 from .catalog import UNBUNDLED
-from .cpp_processors import CPP_PROCESSORS
+from .cpp_processors import CPP_PROCESSORS, CPP_SERVICES
 from .runtimes import CPP, JAVA, VERSIONS
 from .compiler import REMOTE_PROCESS_GROUP, CompileError, compile_flow, runtime_validation
 from .config import settings
 from .delivery import (
     ACTIVE, MANIFEST_COMPONENTS, artifact_components, artifact_for,
-    deployment_blocker, missing_agent_components, permits_execution,
+    deployment_blocker, missing_agent_components, permits_execution, unsupported_cpp_properties,
 )
 from .migrate import upgrade_schema
 from .nifi import InputPort, input_ports
@@ -46,7 +46,10 @@ def health(db: Session = Depends(get_db)):
 def catalog(runtime: Literal["minifi-java", "minifi-cpp"] = JAVA):
     if runtime == CPP:
         return {
-            kind: {"category": schema["bundle"]["artifact"], "runtime": [CPP], "status": "SUPPORTED", "configuration": schema}
+            kind: {
+                "category": schema["bundle"]["artifact"], "runtime": [CPP], "configuration": schema,
+                "status": "SUPPORTED" if kind in {"GenerateFlowFile", "UpdateAttribute", "LogAttribute"} else "BUNDLED",
+            }
             for kind, schema in CPP_PROCESSORS.items()
         }
     return {
@@ -65,7 +68,7 @@ def catalog(runtime: Literal["minifi-java", "minifi-cpp"] = JAVA):
 @app.get("/api/v1/flow-editor")
 def flow_editor(runtime: Literal["minifi-java", "minifi-cpp"] = JAVA):
     return {"queue": QUEUE_FIELDS, "runtime_version": VERSIONS[runtime],
-            "controller_services": SERVICE_SCHEMAS if runtime == JAVA else {}}
+            "controller_services": CPP_SERVICES if runtime == CPP else SERVICE_SCHEMAS}
 
 def agent_health(last_seen: datetime | None, recent: datetime) -> str:
     if last_seen is None:
@@ -152,7 +155,8 @@ def list_flows(
 
 def flow_definition(payload: FlowCreate | FlowEdit, flow_id: str) -> dict:
     definition = payload.definition.model_dump(mode="json")
-    if errors := validate_secret_fields(definition):
+    processors, services = (CPP_PROCESSORS, CPP_SERVICES) if definition["runtime"] == CPP else (PROCESSOR_SCHEMAS, SERVICE_SCHEMAS)
+    if errors := validate_secret_fields(definition, processors, services):
         raise HTTPException(422, errors)
     description = payload.description if payload.description is not None else definition["description"]
     return definition | {"flow_id": flow_id, "name": payload.name, "description": description}
@@ -332,6 +336,8 @@ def create_deployment(payload: DeploymentCreate, db: Session = Depends(get_db)):
         raise HTTPException(403, "The target is not enabled for command execution processors")
     if missing := missing_agent_components(agent, components):
         raise HTTPException(409, "Agent manifest is missing required components: " + ", ".join(missing))
+    if unsupported := unsupported_cpp_properties(agent, components):
+        raise HTTPException(409, "Agent operating system is incompatible: " + "; ".join(unsupported))
     deployment.agent_id = agent.id
     deployment.target_class = agent.agent_class
     db.add(deployment)

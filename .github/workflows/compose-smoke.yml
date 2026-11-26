@@ -34,5 +34,11 @@ jobs:
           docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml --profile smoke config --quiet
           docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -f compose.nifi.yaml --profile smoke config --quiet
       - run: docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -f compose.nifi.yaml --profile smoke up --build --exit-code-from smoke
+      - name: Verify opted-in Python processing on the C++ agent
+        env:
+          MINIFI_ALLOW_EXECUTION_PROCESSORS: "true"
+        run: |
+          docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -f compose.nifi.yaml --profile smoke up -d --wait api ui minifi-cpp minifi-smoke-agent
+          docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -f compose.nifi.yaml --profile smoke run --rm --no-deps -e PYTHONPATH=/app:/app/tests smoke python -m unittest -v test_cpp.CppDeploymentTest.test_native_python_execution_requires_opt_in
       - if: always()
         run: docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -f compose.nifi.yaml --profile smoke down

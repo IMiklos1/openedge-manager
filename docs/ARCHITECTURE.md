@@ -61,14 +61,14 @@ Changing **Flow runtime** loads a separate catalog and preserves any existing dr
 settings. Unsupported components or settings must be resolved before publication.
 
 ## Processor capability catalogue
-The generated catalog takes component classes, bundle coordinates, properties, input rules
-and relationships from the stock image's NAR manifests. OEM verifies declared components
-against the exact runtime heartbeat before queueing or dispatching a deployment. The
-catalog lists 117 processors and 47 controller services. Device-side validators still
-govern valid values and external resources. [Catalog provenance and coverage](PROCESSOR_CATALOG.md)
-The C++ runtime exposes the tested GenerateFlowFile, UpdateAttribute and LogAttribute
-processors with C++ property names. C++ controller services and relationship retry
-configuration are outside this profile.
+The Java catalog uses the stock image's NAR manifests and lists 117 processors and
+47 controller services. The C++ catalog combines the manifests from the pinned Linux
+image and Windows MSI and lists 94 processors and 22 controller services. Both catalogs
+provide native class and bundle coordinates, properties, input rules and relationships.
+C++ service references compile to deterministic service UUIDs in the native JSON flow.
+OEM checks the target's manifest and platform-specific fields before queueing or dispatching
+an update. Device-side validators still govern valid values and external resources.
+[Catalog provenance and coverage](PROCESSOR_CATALOG.md)
 
 ## Outbound-only deployment
 
@@ -90,7 +90,9 @@ The adapter handles uncompressed JSON from MiNiFi Java 2.12.0 and MiNiFi C++ 1.1
 `POST /c2-protocol/heartbeat` upserts agent identity and reported metadata in PostgreSQL,
 then returns a `requestedOperations` array. The Compose agents send their manifests in
 heartbeats. The API detects Java by `minifi-java` and native C++ by `cpp`, and persists
-component identities from the manifest. Heartbeats without the manifest preserve the
+component identities from the manifest. For full Windows C++ heartbeats, the API can
+recover a legacy Windows-1252 hostname while validating the rest of the JSON as UTF-8.
+Heartbeats without the manifest preserve the
 recorded runtime, version and component list.
 
 To verify the return path, set `MINIFI_PROBE_AGENT_ID` to the test agent identifier. The API

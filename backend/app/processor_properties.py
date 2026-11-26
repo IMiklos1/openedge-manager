@@ -11,6 +11,11 @@ ATTRIBUTE_NAME = re.compile(r"[A-Za-z_][\w.-]{0,63}", re.ASCII)
 DURATION = re.compile(r"(\d{1,8}) *(ms|sec|min|hour)")
 SIZE = re.compile(r"(\d{1,8}) *(B|KB|MB)")
 SAFE_ATTRIBUTE_REGEX = re.compile(r"\^?[\w.-]+(?:\|[\w.-]+)*\$?", re.ASCII)
+NATIVE_INTEGER_FORMATS = {
+    "INTEGER_VALIDATOR": (r"-?[0-9]{1,19}", -(2**63), 2**63 - 1),
+    "NON_NEGATIVE_INTEGER_VALIDATOR": (r"[0-9]{1,20}", 0, 2**64 - 1),
+    "PORT_VALIDATOR": (r"[0-9]{1,5}", 0, 65535),
+}
 
 
 LEGACY_PROPERTIES = {
@@ -70,6 +75,8 @@ def component_properties(component):
     result = {}
     for key, descriptor in component["properties"].items():
         choices = descriptor.get("choices", [])
+        if descriptor.get("validator") == "BOOLEAN_VALIDATOR" and not choices:
+            choices = [{"value": value, "displayName": value} for value in ("true", "false")]
         options = [choice["value"] for choice in choices]
         default = descriptor.get("defaultValue")
         field = {
@@ -93,6 +100,9 @@ def component_properties(component):
             field.update(type="service", service=service)
         if descriptor.get("dynamicallyModifiesClasspath"):
             field["modifies_classpath"] = True
+        for name in ("validator", "platforms"):
+            if name in descriptor:
+                field[name] = descriptor[name]
         result[key] = field
     return result
 
@@ -153,10 +163,10 @@ def property_text(value):
     raise ValueError("Use a finite scalar value of at most 32768 characters.")
 
 
-def validate_secret_fields(definition):
+def validate_secret_fields(definition, processors=PROCESSOR_SCHEMAS, services=SERVICE_SCHEMAS):
     errors = []
-    for entries, schemas in ((definition.get("nodes", []), PROCESSOR_SCHEMAS),
-                             (definition.get("controller_services", []), SERVICE_SCHEMAS)):
+    for entries, schemas in ((definition.get("nodes", []), processors),
+                             (definition.get("controller_services", []), services)):
         for entry in entries:
             fields = schemas.get(entry["type"], {}).get("properties", {})
             for values in (entry.get("config", {}), entry.get("attributes", {})):
@@ -216,7 +226,7 @@ def resolve_fields(values, fields, scope, errors):
     return result
 
 
-def resolve_properties(component, schema, services, scope, errors):
+def resolve_properties(component, schema, services, scope, errors, *, defaults=None):
     fields = schema["properties"]
     config = component.get("config", {})
     raw = {key: field["default"] for key, field in fields.items() if "default" in field}
@@ -238,6 +248,8 @@ def resolve_properties(component, schema, services, scope, errors):
                 raise ValueError("Parameter contexts are unavailable.")
             if expression and field["expression_scope"] == "NONE":
                 raise ValueError("This property does not support Expression Language.")
+            if not expression:
+                validate_native_literal(value, field.get("validator"))
             if field.get("choices") and not expression and value not in field["choices"]:
                 if field["type"] == "boolean":
                     value = next((option for option in field["choices"] if option.lower() == value.lower()), value)
@@ -279,9 +291,19 @@ def resolve_properties(component, schema, services, scope, errors):
     ):
         errors.append(f"{scope}, Custom Text: choose Text and turn off Unique FlowFiles.")
     # Use NiFi's own defaults for the bundled components. Preserve OEM's previously published legacy defaults.
-    legacy_defaults = {key: property_text(field["default"]) for key, field in
-                       LEGACY_PROPERTIES.get(component["type"], {}).get("properties", {}).items() if "default" in field}
-    return legacy_defaults | overrides, effective
+    if defaults is None:
+        defaults = {key: property_text(field["default"]) for key, field in
+                    LEGACY_PROPERTIES.get(component["type"], {}).get("properties", {}).items() if "default" in field}
+    return defaults | overrides, effective
+
+
+def validate_native_literal(value, validator):
+    if validator == "NON_BLANK_VALIDATOR" and not value.strip():
+        raise ValueError("Enter a non-blank value.")
+    if validator in NATIVE_INTEGER_FORMATS:
+        pattern, minimum, maximum = NATIVE_INTEGER_FORMATS[validator]
+        if not re.fullmatch(pattern, value) or not minimum <= int(value) <= maximum:
+            raise ValueError(f"Use an integer from {minimum} to {maximum}.")
 
 
 def resolve_processor(node, services, errors):

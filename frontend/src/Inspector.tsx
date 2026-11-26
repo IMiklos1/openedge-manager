@@ -32,6 +32,7 @@ function Fields({ fields, values, change, disabled, services = [] }: {
     const details = [
       field.description, field.sensitive && 'Sensitive values need a dedicated secret integration.',
       field.modifies_classpath && 'Use resources provisioned on the target agent.',
+      field.platforms && `Available on ${field.platforms.join(', ')} only.`,
       field.expression_scope && field.expression_scope !== 'NONE' && `Expression Language scope: ${field.expression_scope}`,
       !applies && 'Applies when its dependent properties are configured.',
     ].filter(Boolean).join(' ')
@@ -83,6 +84,7 @@ function ComponentProperties({ component, schema, change, disabled, services }: 
   const isGenerator = component.type === 'GenerateFlowFile'
   return <>
     <p className="muted">{schema.description}</p>
+    {schema.platforms?.length === 1 && <p className="muted">Available on {schema.platforms[0]} only.</p>}
     <Fields fields={schema.properties} values={component.config} disabled={disabled} services={services}
       change={config => change({ config, attributes: component.attributes })}/>
     {schema.dynamic_properties && <fieldset className="attributes">
@@ -196,10 +198,10 @@ export function ServiceInspector({ service, schema, services, change, remove, di
         onChange={event => change({ ...service, label: event.target.value || null })}/></label>
       <label className="input-field">Comments<textarea value={service.description ?? ''} disabled={disabled}
         onChange={event => change({ ...service, description: event.target.value || null })}/></label>
-      <label className="input-field">Initial state<select value={service.state ?? 'ENABLED'} disabled={disabled}
+      {!schema.platforms && <label className="input-field">Initial state<select value={service.state ?? 'ENABLED'} disabled={disabled}
         onChange={event => change({ ...service, state: event.target.value === 'DISABLED' ? 'DISABLED' : 'ENABLED' })}>
         <option>ENABLED</option><option>DISABLED</option>
-      </select></label>
+      </select></label>}
       <ComponentProperties component={service} schema={schema} services={services.filter(item => item.id !== service.id)}
         disabled={disabled} change={values => change({ ...service, ...values })}/>
       <button onClick={remove} disabled={disabled}>Remove service</button>
