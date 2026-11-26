@@ -146,10 +146,17 @@ native properties and relationship names, validate service references and enforc
 platform-specific properties at deployment. The native catalog is generated from the
 release binaries and can be reproduced with [the catalog commands](PROCESSOR_CATALOG.md#minifi-c-110-catalog).
 
-The heartbeat regression sends malformed UTF-8 confined to the hostname and checks
-the persisted hostname, OS, architecture and C++ capability manifest. The Linux native
-smoke tests compare every bundled component with the live heartbeat, verify record
-transformation with native controller services, and exercise the execution opt-in.
+On Linux amd64, all six targeted tests passed. They compared every bundled component
+with the live heartbeat, deployed two native revisions, checked record transformation
+and dynamic routing, and rejected platform mismatches, sensitive draft values and
+execution without opt-in. A separate opt-in run deployed an `ExecuteScript` Python
+flow over C2 and verified the HTTP payload and script-generated header.
+The Windows hostname regression sent raw Windows-1252 bytes and verified the hostname,
+OS, architecture and capability manifest in PostgreSQL. The Chromium workspace test
+opened the expanded catalog and saved and deployed real Java and C++ flow revisions.
+[Smoke commands](../README.md#mixed-runtime-smoke-tests) ·
+[Python opt-in command](../README.md#verify-native-python-execution)
+
 The Windows catalog was extracted from the checksum-verified MSI with `--manifest` under
 Wine. Native Windows flow execution, real Windows heartbeat capture, ARM64 and processor
 execution against external systems remain unverified.

@@ -227,6 +227,8 @@ NiFi, deploy a flow to each agent and check the forwarded payload by SHA-256.
 
 The suite verifies that both runtimes check in, then publishes and deploys different
 C++ revisions and waits for processing metrics, download digests and C2 acknowledgements.
+It compares the native catalog with the live Linux manifest and checks record conversion,
+dynamic routing, Windows hostname recovery and the default execution policy.
 
 On Bash:
 
@@ -238,6 +240,32 @@ MINIFI_PROBE_AGENT_ID=oem-smoke-agent-01 MINIFI_FLOW_AGENT_ID=oem-smoke-agent-01
 result=$?
 docker compose -f docker-compose.yml -f compose.minifi-cpp.yaml -p "$project" --profile smoke down
 test "$result" -eq 0
+```
+
+### Verify native Python execution
+
+Use a disposable Compose project and enable execution for this test only. The smoke
+test deploys an `ExecuteScript` flow and verifies the payload and the header set by Python.
+
+```powershell
+$project = "openedge-python-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
+$options = @("-f", "docker-compose.yml", "-f", "compose.minifi-cpp.yaml", "-p", $project, "--profile", "smoke")
+$env:MINIFI_FLOW_AGENT_ID = "oem-smoke-agent-01"
+$env:MINIFI_FLOW_AGENT_IDS = "oem-test-agent-cpp"
+$env:OEM_CPP_C2_ORIGIN = "http://c2-observer:8001"
+$env:MINIFI_ALLOW_EXECUTION_PROCESSORS = "true"
+$env:OEM_API_PORT = "0"
+$env:OEM_UI_PORT = "0"
+try {
+    docker compose @options up --build -d --wait api ui minifi-cpp minifi-smoke-agent
+    if ($LASTEXITCODE -ne 0) { throw "Compose startup failed" }
+    docker compose @options run --build --rm --no-deps -e PYTHONPATH=/app:/app/tests smoke python -m unittest -v test_cpp.CppDeploymentTest.test_native_python_execution_requires_opt_in
+    if ($LASTEXITCODE -ne 0) { throw "C++ Python integration test failed" }
+} finally {
+    docker compose @options down
+    Remove-Item Env:MINIFI_FLOW_AGENT_ID, Env:MINIFI_FLOW_AGENT_IDS, Env:OEM_CPP_C2_ORIGIN
+    Remove-Item Env:MINIFI_ALLOW_EXECUTION_PROCESSORS, Env:OEM_API_PORT, Env:OEM_UI_PORT
+}
 ```
 
 ## Verify the workspace in Chromium
