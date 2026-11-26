@@ -35,6 +35,10 @@ These development routes are at the API root. Both accept uncompressed JSON with
 media type or encoding, 413 for an oversized body, and 422 for an invalid message.
 For a 422, the API log records the first failing field path and validation error type,
 and the byte offset if UTF-8 is invalid, without logging the body or field values.
+When a full heartbeat reports `agentType=cpp` and `operatingSystem=Windows`, the API can
+recover legacy Windows-1252 bytes in `deviceInfo.networkInfo.hostname`. Other fields
+and acknowledgements require UTF-8. The repaired heartbeat goes through the same schema
+validation before persistence.
 
 | Method | Path | Behavior |
 | --- | --- | --- |

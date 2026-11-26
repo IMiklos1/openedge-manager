@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+import json
 from typing import Annotated, Literal, TypeVar
 from uuid import uuid4
 
@@ -126,11 +127,52 @@ async def read_c2_body(request: Request) -> bytearray:
 Message = TypeVar("Message", bound=BaseModel)
 
 
+def json_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    result = dict(pairs)
+    if len(result) != len(pairs):
+        raise ValueError("Duplicate JSON key")
+    return result
+
+
+def repair_windows_cpp_hostname(body: bytearray) -> bytes | None:
+    # MiNiFi C++ 1.1.0 uses the narrow Windows gethostname() result in its JSON.
+    try:
+        body.decode("utf-8")
+        return None
+    except UnicodeDecodeError:
+        pass
+    wire = body.decode("utf-8", errors="surrogateescape")
+    invalid_bytes = sum("\udc80" <= char <= "\udcff" for char in wire)
+    try:
+        payload = json.loads(wire, object_pairs_hook=json_without_duplicate_keys)
+        device = payload["deviceInfo"]
+        network = device["networkInfo"]
+        hostname = network["hostname"]
+        if (
+            device["systemInfo"]["operatingSystem"] != "Windows"
+            or payload["agentInfo"]["agentManifest"]["agentType"] != "cpp"
+            or not isinstance(hostname, str)
+            or sum("\udc80" <= char <= "\udcff" for char in hostname) != invalid_bytes
+        ):
+            return None
+        network["hostname"] = hostname.encode("utf-8", errors="surrogateescape").decode("cp1252", errors="replace")
+        # Serialization must still fail if any other field or JSON key has invalid Unicode.
+        return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    except (KeyError, TypeError, ValueError, RecursionError):
+        return None
+
+
 def parse_c2_message(model: type[Message], body: bytearray) -> Message:
     try:
         return model.model_validate_json(body)
     except ValidationError as exc:
         error = exc.errors(include_input=False, include_context=False, include_url=False)[0]
+        if model is Heartbeat and error["type"] == "json_invalid":
+            if repaired := repair_windows_cpp_hostname(body):
+                try:
+                    return model.model_validate_json(repaired)
+                except ValidationError:
+                    pass
         field = ".".join(map(str, error["loc"])) or "<body>"
         logger.warning("Invalid C2 %s: field=%s type=%s", model.__name__, field, error["type"])
         if error["type"] == "json_invalid":
